@@ -1,9 +1,10 @@
 # src/project/models.py
 import uuid
-from sqlalchemy import Column, String, TEXT, Integer, ForeignKey, Numeric
+from sqlalchemy import Column, String, TEXT, Integer, Numeric, DateTime, ForeignKey, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import JSON
-from sqlalchemy.dialects.postgresql import UUID
+# from sqlalchemy.dialects.postgresql import UUID # This is already there, ensure it's imported
+from datetime import datetime # NEW: Import datetime
 from src.core.database import Base
 
 class Project(Base):
@@ -24,7 +25,6 @@ class Part(Base):
     title = Column(String, nullable=False)
     summary = Column(TEXT, nullable=True)
 
-    # NEW: To track the status of chapter generation for this part.
     status = Column(String, default="DEFINED", nullable=False)
 
     project = relationship("Project", back_populates="parts")
@@ -38,7 +38,21 @@ class Chapter(Base):
     title = Column(String, nullable=False)
     brief = Column(JSON, nullable=True)
     content = Column(TEXT, nullable=True)
-    status = Column(String, default="BRIEF_PENDING_VALIDATION")
+    # UPDATED: Initial status for a new chapter.
+    # It's 'BRIEF_COMPLETE' after human validation, but we can refine this later.
+    # For now, let's ensure the `content`-related statuses are distinct.
+    status = Column(String, default="BRIEF_COMPLETE") # Status when brief is finalized, awaiting content generation
     suggested_agent = Column(String, nullable=True)
     transition_feedback = Column(TEXT, nullable=True)
     part = relationship("Part", back_populates="chapters")
+    versions = relationship("ChapterVersion", back_populates="chapter", cascade="all, delete-orphan", order_by="ChapterVersion.created_at")
+
+class ChapterVersion(Base):
+    __tablename__ = "chapter_versions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
+    content = Column(TEXT, nullable=False)
+    token_count = Column(Integer, nullable=True) # NEW: Store token count for the version
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    chapter = relationship("Chapter", back_populates="versions")

@@ -1,13 +1,14 @@
 # src/project/service.py
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload, subqueryload
-from sqlalchemy import delete
-from sqlalchemy.orm import selectinload, subqueryload # Ensure this is present
-from sqlalchemy import delete, select # Ensure delete and select are present
-from .models import Project, Part, Chapter
+from sqlalchemy import delete # Ensure delete is imported
+
+from .models import Project, Part, Chapter, ChapterVersion # NEW: Import ChapterVersion
 from .schemas import ProjectCreate
 from src.crew.schemas import PartListOutline, ChapterListOutline
+
 async def create_project(session: AsyncSession, project_data: ProjectCreate) -> Project:
     """Creates a new project record from a user's raw text blueprint."""
     new_project = Project(**project_data.model_dump())
@@ -123,15 +124,7 @@ async def finalize_chapter_structure(
 
     return refreshed_part # Return the eagerly loaded part
 
-async def update_chapter_content(session: AsyncSession, chapter_id: uuid.UUID, content: str) -> Chapter | None:
-    """Updates the content of a specific chapter and sets its status to 'Complete'."""
-    chapter = await get_chapter_by_id(session, chapter_id)
-    if chapter:
-        chapter.content = content
-        chapter.status = "Complete"
-        await session.commit()
-        await session.refresh(chapter)
-    return chapter
+
 
 async def update_project_summary_outline(session: AsyncSession, project_id: uuid.UUID, outline: str) -> Project | None:
     """(Legacy) Updates the summary_outline field of a project."""
@@ -141,3 +134,31 @@ async def update_project_summary_outline(session: AsyncSession, project_id: uuid
         await session.commit()
         await session.refresh(project)
     return project
+
+
+async def update_chapter_status(session: AsyncSession, chapter_id: uuid.UUID, new_status: str) -> Chapter | None:
+    """Updates the status of a specific chapter."""
+    chapter = await get_chapter_by_id(session, chapter_id)
+    if chapter:
+        chapter.status = new_status
+        await session.commit()
+        await session.refresh(chapter)
+    return chapter
+
+async def update_chapter_content(session: AsyncSession, chapter_id: uuid.UUID, content: str, token_count: int | None = None) -> Chapter | None:
+    """Updates the content of a specific chapter and also creates a new ChapterVersion record."""
+    chapter = await get_chapter_by_id(session, chapter_id)
+    if chapter:
+        # Create a new version record
+        new_version = ChapterVersion(
+            chapter_id=chapter.id,
+            content=content,
+            token_count=token_count
+        )
+        session.add(new_version)
+        
+        chapter.content = content # Update the current content
+        # REMOVED: chapter.status = "CONTENT_GENERATED" - Status is set by caller now
+        await session.commit()
+        await session.refresh(chapter)
+    return chapter
