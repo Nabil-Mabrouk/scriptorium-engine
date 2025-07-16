@@ -6,9 +6,11 @@ psycopg[binary]  # For async PostgreSQL connection
 python-dotenv
 alembic
 aiosqlite 
-crewai
-crewai-tools
+langchain
+langchain-core
 langchain-openai  # Or another provider like langchain-anthropic
 python-decouple # A good library for handling API keys
 arq
 redis
+openai-agents
+fastapi-limiter[redis]

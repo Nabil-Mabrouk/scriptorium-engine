@@ -1,26 +1,40 @@
 # src/project/schemas.py
 import uuid
 from decimal import Decimal
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any
 from src.crew.schemas import ChapterBrief
-
-# --- Blueprint Sub-Models are no longer needed for input ---
+from pydantic import field_validator
 
 # --- Main Application Schemas ---
 
 class ProjectCreate(BaseModel):
-    """The schema for creating a project from a simple text blueprint."""
-    blueprint: str # The input is now a simple string
+    """The schema for creating a project from a raw text blueprint."""
+    # UPDATED: Renamed to match the new database model.
+    raw_blueprint: str
 
 # --- Read Schemas (for API responses) ---
-# These remain the same as they reflect the structured data AFTER the Architect has run.
 
 class ProjectRead(BaseModel):
     """Base read schema for a project."""
     id: uuid.UUID
-    blueprint: str # This will now show the original text blueprint
+    
+    # UPDATED: Renamed to match the model.
+    raw_blueprint: str
+    
+    # NEW: To show the project's current phase.
+    status: str
+    
+    # NEW: To show the evolving structured data.
+    structured_outline: Dict[str, Any] | None = None
+    
     total_cost: Decimal
+
+    @field_validator('structured_outline')
+    def validate_outline(cls, value):
+        if value is not None and not isinstance(value, dict):
+            raise ValueError("structured_outline must be a dictionary")
+        return value
 
     class Config:
         from_attributes = True

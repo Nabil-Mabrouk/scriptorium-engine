@@ -1,67 +1,48 @@
-from crewai import Task, Agent
-from typing import Dict, Any
-from src.project.schemas import ProjectRead, ChapterRead
-from src.crew.agents import AGENT_ROSTER
-from .schemas import BookOutline
+# src/crew/tasks.py
 
-# The format_blueprint_as_text helper function is no longer needed and can be removed.
+from typing import Dict
 
-def create_outline_task(agent: Agent) -> Task:
-    """
-    Creates the primary task for the Architect AI to interpret a raw text idea
-    and generate a complete, structured book outline.
-    """
-    available_agents_str = "\n".join([f"- {name}: {desc}" for name, desc in AGENT_ROSTER.items()])
+from src.project.schemas import ChapterRead
+from .schemas import PartListOutline, ChapterListOutline
+from .agents import AGENT_ROSTER
+# src/crew/tasks.py
 
-    description = (
-        "You are a master Information Architect. Your task is to take a user's raw, "
-        "free-form idea for a book and transform it into a comprehensive, structured outline. "
-        "Analyze the user's intent, identify the core themes, and organize the content into logical Parts and Chapters. "
-        "For each Chapter, you must create a detailed `brief` that will guide a specialist writer.\n\n"
-        "### User's Raw Book Idea:\n"
-        "--- START OF IDEA ---\n"
-        "{blueprint_text}"
-        "\n--- END OF IDEA ---\n\n"
-        "**CRITICAL FINAL INSTRUCTION:** Now, based on the user's idea, generate the complete, structured `BookOutline` in the required JSON format. "
-        "Your role is to be a brilliant architect; if the user's idea is sparse, elaborate on it to create a full structure. "
-        "If it is detailed, ensure your structure faithfully represents their vision."
-    )
+def prepare_part_generation_inputs(raw_blueprint: str) -> dict:
+    """Prepares inputs for the architect chain to generate book parts."""
+    return {
+        "raw_blueprint": raw_blueprint
+    }
 
-    expected_output = (
-        "A single, valid JSON object that conforms to the `BookOutline` schema. "
-        "This object must contain a list of 'parts', and each part must contain a list of 'chapters'. "
-        "Each chapter must have a detailed 'brief' object. "
-        "For the 'suggested_agent' field, you MUST choose a valid agent from the provided list.\n\n"
-        "### Available Agents:\n"
-        f"{available_agents_str}"
-    )
+def prepare_chapter_detailing_inputs(part_title: str, part_summary: str) -> dict:
+    """Prepares inputs for the architect chain to generate chapter details."""
+    return {
+        "part_title": part_title,
+        "part_summary": part_summary
+    }
 
-    return Task(
-        description=description,
-        expected_output=expected_output,
-        agent=agent,
-        output_pydantic=BookOutline
-    )
+def prepare_chapter_writing_inputs(chapter_data: dict) -> dict:
+    """Prepares inputs for specialist chains to write chapter content."""
+    brief = chapter_data.get("brief", {})
+    return {
+        "title": chapter_data.get("title", ""),
+        "brief": (
+            f"- Chapter Thesis: {brief.get('thesis_statement', '')}\n"
+            f"- Narrative Arc: {brief.get('narrative_arc', '')}\n"
+            f"- Key Questions: {', '.join(brief.get('key_questions_to_answer', []))}\n"
+            f"- Required Inclusions: {', '.join(brief.get('required_inclusions', []))}"
+        )
+    }
 
-# --- Chapter Writing Task (Unchanged) ---
-def create_chapter_writing_task(agent: Agent, chapter_data: ChapterRead) -> Task:
-    # This function remains the same as before.
-    part_info = chapter_data.part
-    brief = chapter_data.brief
-    formatted_brief = (
-        f"- **Chapter Thesis:** {brief['thesis_statement']}\n"
-        f"- **Narrative Arc:** {brief['narrative_arc']}\n"
-        f"- **Key Questions to Answer:**\n" + "".join([f"  - {q}\n" for q in brief['key_questions_to_answer']]) +
-        f"- **Must-Include Concepts/Names:**\n" + "".join([f"  - {i}\n" for i in brief['required_inclusions']])
-    )
-    description = (
-        "You are a specialist writer...\n\n"
-        f"## Your Assignment Context:\n- **You are writing for Part {part_info.part_number}: '{part_info.title}'**\n"
-        f"- **Part Summary:** {part_info.summary}\n\n"
-        "## Your Specific Chapter Task:\n"
-        f"- **Write Chapter {chapter_data.chapter_number}: '{chapter_data.title}'**\n"
-        f"- **Chapter Brief:**\n{formatted_brief}\n\n"
-        "Produce only the raw text of the chapter itself..."
-    )
-    expected_output = "The full, complete text of the book chapter..."
-    return Task(description=description, expected_output=expected_output, agent=agent)
+def prepare_transition_analysis_inputs(preceding_end: str, current_start: str) -> dict:
+    """Prepares inputs for continuity editor chain to analyze transitions."""
+    return {
+        "preceding_chapter_end": preceding_end[-500:],  # Last 500 chars
+        "current_chapter_start": current_start[:500]    # First 500 chars
+    }
+
+def prepare_finalization_inputs(task_type: str, full_book_content: str) -> dict:
+    """Prepares inputs for theorist chain to write introduction/conclusion."""
+    return {
+        "task_type": task_type,
+        "full_book_content": full_book_content
+    }

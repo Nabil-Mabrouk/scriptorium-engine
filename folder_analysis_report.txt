@@ -46,6 +46,7 @@ src/
         dependencies.py
         exceptions.py
         models.py
+        part_router.py
         router.py
         schemas.py
         service.py
@@ -53,6 +54,7 @@ src/
             chapter_router.cpython-312.pyc
             dependencies.cpython-312.pyc
             models.cpython-312.pyc
+            part_router.cpython-312.pyc
             router.cpython-312.pyc
             schemas.cpython-312.pyc
             service.cpython-312.pyc
@@ -64,29 +66,59 @@ src/
 from fastapi import FastAPI
 from src.core.config import settings
 from src.core.database import Base, engine
-from src.core.task_queue import task_queue # <<< IMPORT OUR ABSTRACTION
+from src.core.task_queue import task_queue
 from src.project.chapter_router import router as chapter_router
 from src.project.router import router as project_router
+from src.project.part_router import router as part_router
 from src.crew.router import router as crew_router
+
+# NEW IMPORTS for Rate Limiter
+from fastapi_limiter import FastAPILimiter
+from redis.asyncio import Redis # Use async Redis client
+
+# NEW: Import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Scriptorium-Engine", version=settings.APP_VERSION)
 
+# NEW: CORS Configuration
+origins = [
+    "http://localhost:5173",  # This is the default port for Vite dev server
+    # Add any other origins where your frontend might be hosted in development or production
+    # e.g., "https://your.production.domain"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"], # Allows all HTTP methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"], # Allows all headers
+)
 
 @app.on_event("startup")
 async def startup_event():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    # Configure and then connect the task queue
     task_queue.configure(settings.REDIS_URL)
     await task_queue.connect()
 
+    # NEW: Initialize FastAPILimiter with Redis
+    redis_client = Redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+    await FastAPILimiter.init(redis_client)
+    print("⚡ FastAPILimiter initialized.")
+
 @app.on_event("shutdown")
 async def shutdown_event():
-    # Close the task queue connection
     await task_queue.close()
+    # NEW: Close FastAPILimiter connections
+    await FastAPILimiter.close()
+    print("🔌 FastAPILimiter closed.")
 
 app.include_router(project_router)
 app.include_router(chapter_router)
+# NEW: Include the new part_router
+app.include_router(part_router)
 app.include_router(crew_router)
 
 @app.get("/", tags=["Health Check"])
@@ -99,9 +131,10 @@ async def health_check():
 --- FILE: C:\Projects\57-scriptorium-engine\src\core\config.py ---
 # src/core/config.py
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from decimal import Decimal # Import Decimal
+from typing import Dict # Import Dict
 
 class Settings(BaseSettings):
-    # Load settings from the .env file
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     # --- Core Application Settings ---
@@ -110,13 +143,29 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     ENVIRONMENT: str = "development"
 
-    # --- CrewAI / LLM Settings ---
-    # These are now part of the main settings object to avoid conflicts.
+    # --- LLM Settings ---
     OPENAI_API_KEY: str
-    OPENAI_MODEL_NAME: str = "gpt-4-turbo-preview"
+    # This will be the DEFAULT model if not specified per agent
+    DEFAULT_OPENAI_MODEL_NAME: str #= "gpt-4o-mini" # Renamed from OPENAI_MODEL_NAME
 
-# Create a single, importable instance of the settings
+    # NEW: LLM Pricing Configuration
+    # This can be loaded from an environment variable as a JSON string,
+    # or defined directly with defaults, or loaded from a separate JSON/YAML file.
+    # For simplicity, we'll make it a JSON string loaded from env.
+    # Example JSON: {"gpt-4o-mini": {"prompt": 0.15, "completion": 0.60}, "gpt-4-turbo": {"prompt": 10.00, "completion": 30.00}}
+    LLM_PRICING: Dict[str, Dict[str, Decimal]] = {
+        "gpt-4o-mini": {"prompt": Decimal("0.15"), "completion": Decimal("0.60")},
+        "gpt-4-turbo": {"prompt": Decimal("10.00"), "completion": Decimal("30.00")},
+        "gpt-4": {"prompt": Decimal("30.00"), "completion": Decimal("60.00")},
+        "gpt-3.5-turbo-0125": {"prompt": Decimal("0.50"), "completion": Decimal("1.50")},
+    }
+
 settings = Settings()
+
+# NOTE: If loading LLM_PRICING from an environment variable (e.g., LLM_PRICING_JSON),
+# you'd need a Pydantic validator to parse the JSON string into the Dict[str, Dict[str, Decimal]] format.
+# For now, defining it directly with defaults is simplest for demonstration,
+# but for production, externalizing this to a file or a complex ENV var is common.
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\core\database.py ---
 from sqlalchemy import MetaData
@@ -216,128 +265,170 @@ task_queue = TaskQueue()
 
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\agents.py ---
-from crewai import Agent
-from langchain_openai import ChatOpenAI
 
-from src.project.schemas import ProjectRead
+from agents import Agent # This is the crucial new import
+from pydantic import BaseModel, Field # Keep pydantic for output types
 from src.core.config import settings
-from .schemas import BookOutline
+from .schemas import PartListOutline  # Add this import
 
-# Initialize the LLM once to be shared by all agents
-llm = ChatOpenAI(
-    openai_api_key=settings.OPENAI_API_KEY,
-    model_name=settings.OPENAI_MODEL_NAME
-)
+
 
 # --- AGENT ROSTER (Single Source of Truth) ---
 AGENT_ROSTER = {
     "Historian AI": "A master storyteller and historian of technology, ideal for chapters requiring historical analogies and context.",
     "Technologist AI": "An expert at explaining complex technical concepts in a simple, intuitive way. Best for chapters explaining core technologies like multi-agent systems.",
     "Philosopher AI": "An expert in exploring the profound 'so what?' questions and ethical implications. Best for speculative or philosophical chapters.",
-    "Theorist AI": "The primary voice of the book's core argument. Excellent for introductory, concluding, and synthesis chapters that weave the central thesis throughout."
+    "Theorist AI": "The primary voice of the book's core argument. Excellent for introductory, concluding, and synthesis chapters that weave the central thesis throughout.",
+    "Continuity Editor AI": "A meticulous editor focused on ensuring smooth transitions and logical flow between chapters."
 }
 
-# --- Helper Function for Dynamic Backstories ---
-def format_principles_for_backstory(project_data: ProjectRead) -> str:
-    """Dynamically builds the core directives from the project's blueprint."""
-    blueprint = project_data.blueprint
-    working_title = blueprint.get('working_titles', ["Untitled"])[0]
-    guiding_principles = blueprint.get('guiding_principles', {})
+class StringOutput(BaseModel):
+    text: str = Field(..., description="The generated text content.")
 
-    principles = [f"Your primary mission is to contribute to the book titled '{working_title}'."]
-    for key, value in guiding_principles.items():
-        formatted_key = key.replace('_', ' ').title()
-        principles.append(f"- **{formatted_key}:** {value}")
-    return "\n".join(principles)
 
-# --- Agent Definitions ---
+# ORIGINAL: def create_architect_chain(): ...
+# NEW:
+architect_part_agent = Agent(
+    name="BookArchitectAgent",
+    instructions=(
+        "You are a master strategic thinker, specialist in structuring book outlines.\n"
+        "Your goal is to transform raw text ideas into comprehensive, structured book outlines.\n\n"
+        "### Backstory:\n"
+        "You are a master strategic thinker, skilled at transforming free-form ideas into structured, actionable plans.\n"
+        "You excel at identifying core themes, creating logical hierarchies, and building detailed briefs.\n\n"
+    ),
+    model=settings.DEFAULT_OPENAI_MODEL_NAME, # Use the default from settings
+    output_type=PartListOutline,
+    # No tools for this agent as per your example, or use WebSearchTool() if applicable
+)
 
-def create_architect_agent(project_data: ProjectRead) -> Agent:
-    """Creates the Architect AI agent, constraining its output to the BookOutline Pydantic model."""
-    dynamic_backstory = (
-        "You are a master strategist and information architect. Your specialty is creating "
-        "rock-solid, structured blueprints for complex writing projects.\n\n"
-        "**CRITICAL INSTRUCTION: Your ONLY function is to output the required Pydantic data object. "
-        "You MUST NOT engage in conversation or add any text outside of the final data structure.**\n\n"
-        "## Key Project Directives:\n"
-        f"{format_principles_for_backstory(project_data)}"
-    )
-    return Agent(
-        role='Architect AI',
-        goal="Analyze the user's intent and generate a complete, definitive book outline, perfectly formatted as the required Pydantic data object.",
-        backstory=dynamic_backstory, llm=llm, verbose=True, allow_delegation=False,
-    )
+# ORIGINAL: def create_continuity_editor_chain(): ...
+# NEW:
+continuity_editor_agent = Agent(
+    name="ContinuityEditorAgent",
+    instructions=(
+        "You are a Continuity Editor AI focused on ensuring smooth transitions between chapters.\n"
+        "### Backstory:\n"
+        "You are a seasoned book editor with a keen eye for narrative structure and pacing. "
+        "Your specialty is ensuring a seamless reading experience. You don't rewrite content; "
+        "you identify jarring transitions, suggest bridging sentences, and point out thematic "
+        "disconnects, providing clear, concise, and constructive feedback.\n\n"
+        "### Chapter Transition Analysis:\n"
+        "Analyze the transition and provide actionable feedback to improve narrative flow."
+    ),
+    model=settings.DEFAULT_OPENAI_MODEL_NAME, # Use the default from settings
+    output_type=StringOutput, # Expecting raw text feedback
+)
 
-def create_historian_agent(project_data: ProjectRead) -> Agent:
-    """Creates the Historian AI agent with a dynamic backstory."""
-    dynamic_backstory = (
+
+# src/crew/agents.py
+# ... (existing imports) ...
+from src.crew.schemas import PartListOutline, ChapterListOutline # Ensure ChapterListOutline is imported
+
+# ... (existing architect_part_agent definition) ...
+
+# NEW: Architect Agent for Chapter Detailing
+architect_chapter_agent = Agent(
+    name="ChapterArchitectAgent",
+    instructions=(
+        "You are a master strategic thinker, specializing in structuring detailed chapter outlines for a book part.\n"
+        "Your goal is to generate a list of chapters for a given book part, along with detailed briefs for each chapter.\n\n"
+
+    ),
+    model=settings.DEFAULT_OPENAI_MODEL_NAME,
+    output_type=ChapterListOutline, # <--- This is crucial!
+)
+
+# src/crew/agents.py
+# ... (existing imports) ...
+from src.crew.schemas import PartListOutline, ChapterListOutline # Ensure ChapterListOutline is imported
+
+# ... (existing architect_part_agent definition) ...
+
+# NEW: Architect Agent for Chapter Detailing
+architect_chapter_agent = Agent(
+    name="ChapterArchitectAgent",
+    instructions=(
+        "You are a master strategic thinker, specializing in structuring detailed chapter outlines for a book part.\n"
+        "Your goal is to generate a list of chapters for a given book part, along with detailed briefs for each chapter.\n\n"
+    ),
+    model=settings.DEFAULT_OPENAI_MODEL_NAME,
+    output_type=ChapterListOutline, # <--- This is crucial!
+)
+
+
+# ORIGINAL: def create_technologist_chain(): ...
+# NEW:
+technologist_agent = Agent(
+    name="TechnologistAIAgent",
+    instructions=(
+        "You are a Technologist AI explaining complex technical concepts.\n"
+        "### Backstory:\n"
+        "You are a brilliant technologist and educator. You excel at breaking down complex, "
+        "technical concepts into simple, intuitive explanations using powerful, clear analogies.\n\n"
+        "### Chapter Assignment:"
+    ),
+    model=settings.DEFAULT_OPENAI_MODEL_NAME, # Use the default from settings
+    output_type=StringOutput,
+)
+
+# ORIGINAL: def create_philosopher_chain(): ...
+# NEW:
+philosopher_agent = Agent(
+    name="PhilosopherAIAgent",
+    instructions=(
+        "You are a Philosopher AI exploring deeper implications.\n"
+        "### Backstory:\n"
+        "You are a philosopher of technology and a futurist. You don't just explain what something is; "
+        "you explore what it *means*. Your role is to ask the profound 'so what?' questions, exploring the ethical, "
+        "societal, and existential implications of ideas.\n\n"
+        "### Chapter Assignment:"
+    ),
+    model=settings.DEFAULT_OPENAI_MODEL_NAME, # Use the default from settings
+    output_type=StringOutput,
+)
+
+# ORIGINAL: def create_theorist_chain(): ...
+# NEW:
+theorist_agent = Agent(
+    name="TheoristAIAgent",
+    instructions=(
+        "You are a master synthesizer, weaving together disparate ideas from history, technology, and philosophy into a single, powerful, and cohesive "
+        "narrative. You ensure the central thesis is the golden thread running through every chapter you touch.\n\n"
+        "### Assignment:"
+    ),
+    model=settings.DEFAULT_OPENAI_MODEL_NAME, # Use the default from settings
+    output_type=StringOutput,
+)
+
+# ORIGINAL: def create_historian_chain(): ...
+# NEW:
+historian_agent = Agent(
+    name="HistorianAIAgent",
+    instructions=(
+        "You are a Historian AI writing a book chapter using historical analogies.\n"
+        "### Backstory:\n"
         "You are a master storyteller and a historian of technology and science. You have an "
         "uncanny ability to find the perfect analogy from the past to illuminate a complex "
         "modern idea. Your writing is engaging, rich with detail, and always serves to "
         "clarify the core argument by showing how history repeats itself.\n\n"
-        "## Key Project Directives:\n"
-        f"{format_principles_for_backstory(project_data)}"
-    )
-    return Agent(
-        role='Historian AI',
-        goal="Write a full, detailed book chapter based on a given title and summary, using your expertise in historical analogies to create a compelling narrative.",
-        backstory=dynamic_backstory, llm=llm, verbose=True, allow_delegation=False
-    )
-
-def create_technologist_agent(project_data: ProjectRead) -> Agent:
-    """Creates the Technologist AI agent with a dynamic backstory."""
-    dynamic_backstory = (
-        "You are a brilliant technologist and educator. You excel at breaking down complex, "
-        "technical concepts (like multi-agent systems, emergence, and APIs) into simple, intuitive "
-        "explanations using powerful, clear analogies (e.g., ant colonies, economies, brain neurons).\n\n"
-        "## Key Project Directives:\n"
-        f"{format_principles_for_backstory(project_data)}"
-    )
-    return Agent(
-        role='Technologist AI',
-        goal="Explain complex technical concepts in a simple, intuitive, and engaging way for a non-technical audience, using powerful analogies.",
-        backstory=dynamic_backstory, llm=llm, verbose=True, allow_delegation=False
-    )
-
-def create_philosopher_agent(project_data: ProjectRead) -> Agent:
-    """Creates the Philosopher AI agent with a dynamic backstory."""
-    dynamic_backstory = (
-        "You are a philosopher of technology and a futurist. You don't just explain what something is; "
-        "you explore what it *means*. Your role is to ask the profound 'so what?' questions, exploring the ethical, "
-        "societal, and existential implications of the book's core ideas.\n\n"
-        "## Key Project Directives:\n"
-        f"{format_principles_for_backstory(project_data)}"
-    )
-    return Agent(
-        role='Philosopher AI',
-        goal="Explore the profound 'so what?' questions and the ethical, societal, and existential implications of the chapter's topic.",
-        backstory=dynamic_backstory, llm=llm, verbose=True, allow_delegation=False
-    )
-
-def create_theorist_agent(project_data: ProjectRead) -> Agent:
-    """Creates the Theorist AI agent with a dynamic backstory."""
-    dynamic_backstory = (
-        "You are the primary voice of the book's core argument. You are a master synthesizer, weaving "
-        "together disparate ideas from history, technology, and philosophy into a single, powerful, and cohesive "
-        "narrative. You ensure the central thesis is the golden thread running through every chapter you touch.\n\n"
-        "## Key Project Directives:\n"
-        f"{format_principles_for_backstory(project_data)}"
-    )
-    return Agent(
-        role='Theorist AI',
-        goal="Synthesize arguments and ensure the book's central thesis is clear, consistent, and compelling. Write introductory and concluding chapters that frame the book's narrative.",
-        backstory=dynamic_backstory, llm=llm, verbose=True, allow_delegation=False
-    )
-
-# --- Agent Factory Map ---
-# This map allows our service layer to dynamically instantiate the correct agent.
-AGENT_FACTORIES = {
-    "Historian AI": create_historian_agent,
-    "Technologist AI": create_technologist_agent,
-    "Philosopher AI": create_philosopher_agent,
-    "Theorist AI": create_theorist_agent,
-    # The Architect is not a content writer, so it's not in this factory.
+        "### Chapter Assignment:" # Inputs will be prepended by Runner.run
+    ),
+    model=settings.DEFAULT_OPENAI_MODEL_NAME, # Use the default from settings
+    output_type=StringOutput, # Expecting raw text chapter content
+)
+# --- Agent Instances Map ---
+# Update AGENT_INSTANCES to include the new agent
+AGENT_INSTANCES = {
+    "Architect Part AI": architect_part_agent,
+    "Architect Chapter AI": architect_chapter_agent, # NEW ADDITION
+    "Continuity Editor AI": continuity_editor_agent,
+    "Historian AI": historian_agent,
+    "Technologist AI": technologist_agent,
+    "Philosopher AI": philosopher_agent,
+    "Theorist AI": theorist_agent,
 }
+
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\models.py ---
 import uuid
@@ -363,375 +454,998 @@ class CrewRunLog(Base):
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\pricing.py ---
 # src/crew/pricing.py
 from decimal import Decimal
+from src.core.config import settings # Import the settings object
 
-# Prices per 1,000,000 tokens
-MODEL_PRICING = {
-    "gpt-4-turbo-preview": {"prompt": Decimal("10.00"), "completion": Decimal("30.00")},
-    "gpt-4-turbo": {"prompt": Decimal("10.00"), "completion": Decimal("30.00")},
-    "gpt-4": {"prompt": Decimal("30.00"), "completion": Decimal("60.00")},
-    "gpt-3.5-turbo-0125": {"prompt": Decimal("0.50"), "completion": Decimal("1.50")},
-}
+# REMOVE THE ENTIRE MODEL_PRICING DICTIONARY BLOCK
 
 def calculate_cost(model_name: str, prompt_tokens: int, completion_tokens: int) -> Decimal:
     """Calculates the cost of an LLM call based on token usage."""
-    pricing = MODEL_PRICING.get(model_name)
+    # Get pricing from the global settings object
+    pricing = settings.LLM_PRICING.get(model_name)
     if not pricing:
         # Fallback for unknown models to avoid errors
+        print(f"⚠️ Warning: Pricing not found for model '{model_name}'. Cost will be 0.0.")
         return Decimal("0.0")
-    
+
+    # Your previously discussed fix for negative tokens:
+    if prompt_tokens < 0 or completion_tokens < 0:
+        # This should ideally be caught upstream or indicate an issue with LLM usage reporting.
+        print(f"⚠️ Warning: Negative token counts received for model '{model_name}'. Prompt: {prompt_tokens}, Completion: {completion_tokens}. Setting cost to 0.0.")
+        return Decimal("0.0") # Return 0.0 for invalid inputs
+
     prompt_cost = (Decimal(prompt_tokens) / Decimal(1_000_000)) * pricing["prompt"]
     completion_cost = (Decimal(completion_tokens) / Decimal(1_000_000)) * pricing["completion"]
-    
+
     return prompt_cost + completion_cost
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\router.py ---
 # src/crew/router.py
 import uuid
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Body
 
 from src.core.task_queue import task_queue
-# It only needs the project dependency
-from src.project.dependencies import valid_project_id 
-from src.project.schemas import ProjectRead
-from .schemas import TaskStatus
+from src.project.dependencies import valid_project_id, valid_part_id
+from src.project.schemas import ProjectRead, PartRead
+from src.crew.schemas import TaskStatus, FinalizationRequest
+
+# NEW: Import RateLimiter
+from fastapi_limiter.depends import RateLimiter
 
 router = APIRouter(prefix="/crew", tags=["Crew AI"])
 
+# --- Phase 1 Endpoint ---
 @router.post(
-    "/generate-outline/{project_id}",
+    "/generate-parts/{project_id}",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=TaskStatus,
-    summary="Generate or Refine Book Outline"
+    summary="Generate High-Level Part Structure",
+    dependencies=[Depends(RateLimiter(times=5, seconds=60))] # NEW: 5 requests per minute
 )
-async def queue_outline_generation(
+async def queue_part_generation(
     project: ProjectRead = Depends(valid_project_id),
 ):
     """
-    Queues a background job for the Architect AI. This job handles both
-    creation from scratch or refinement of an expert blueprint, and populates
-    the database with the structured outline.
+    Queues a background job for the Architect AI to generate a high-level
+    list of Parts and their summaries from the project's raw blueprint.
     """
-    job = await task_queue.enqueue("outline_generation_worker", project.id)
+    job = await task_queue.enqueue("part_generation_worker", project.id)
     return TaskStatus(job_id=job.job_id, status="queued")
+
+# --- NEW: Phase 2 Endpoint ---
+@router.post(
+    "/generate-chapters/{part_id}",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=TaskStatus,
+    summary="Generate Detailed Chapter Outline for a Part",
+    dependencies=[Depends(RateLimiter(times=10, seconds=60))] # NEW: 10 requests per minute
+)
+async def queue_chapter_detailing(
+    part: PartRead = Depends(valid_part_id),
+):
+    """
+    Queues a background job to generate a detailed chapter outline for a
+    specific part of the book.
+    """
+    job = await task_queue.enqueue("chapter_detailing_worker", part.id)
+    return TaskStatus(job_id=job.job_id, status="queued")
+
+# NEW: Phase 5 Endpoint
+@router.post(
+    "/projects/{project_id}/finalize", # Note: This path is inconsistent with prefix, but let's follow existing.
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=TaskStatus,
+    summary="Generate Introduction or Conclusion",
+    dependencies=[Depends(RateLimiter(times=2, seconds=300))] # NEW: 2 requests per 5 minutes (finalization is heavy)
+)
+async def queue_finalization(
+    project: ProjectRead = Depends(valid_project_id),
+    request: FinalizationRequest = Body(...)
+):
+    """
+    Queues a background job for the Theorist AI to write the book's
+    introduction or conclusion based on the full content.
+    """
+    job = await task_queue.enqueue(
+        "finalization_worker",
+        project.id,
+        request.task_type
+    )
+    return TaskStatus(job_id=job.job_id, status="queued")
+
+# backend router
+@router.get("/crew/status/{job_id}")
+async def job_status(job_id: str):
+    job = await task_queue.pool.get_job(job_id)
+    return {"status": job.status if job else "error"}
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\schemas.py ---
 from pydantic import BaseModel, Field
 from typing import List
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Union
+import json
+from pydantic import BaseModel, Field, validator, ValidationError
+from typing import List, Union
 
 class TaskStatus(BaseModel):
     """A simple schema for returning the status of a queued job."""
     job_id: str
     status: str
 
+# --- Brief and Chapter Schemas (No changes here) ---
+class ChapterBrief(BaseModel):
+    """A structured writing brief for a specialist agent."""
+    thesis_statement: str = Field(..., description="The central thesis or main argument the chapter must defend.")
+    narrative_arc: str = Field(..., description="A description of the chapter's narrative structure.")
+    required_inclusions: List[str] = Field(..., description="A list of non-negotiable concepts that MUST be included.")
+    key_questions_to_answer: List[str] = Field(..., description="The specific questions the chapter must answer.")
+
 class ChapterOutline(BaseModel):
-    """Defines the structure for a single chapter within the book outline."""
-    chapter_number: int = Field(..., description="The sequential number of the chapter, starting from 1 for the whole book.")
-    title: str = Field(..., description="The compelling and descriptive title of the chapter.")
-    summary: str = Field(..., description="A summary of the chapter's purpose, content, and key takeaways.")
-    suggested_agent: str = Field(..., description="The name of the agent from the provided roster that is best suited to write this chapter's content.")
+    """Defines the structure for a single chapter."""
+    chapter_number: int
+    title: str
+    brief: ChapterBrief
+    suggested_agent: str
+
+# --- NEW: Schemas for the "Divide and Conquer" Workflow ---
+
+class PartOnlyOutline(BaseModel):
+    part_number: int = Field(..., description="Numerical order of the part")
+    title: str = Field(..., description="Title of the part")
+    summary: str = Field(..., description="Brief summary of the part's content")
+
+    @validator('part_number')
+    def part_number_positive(cls, v):
+        if v < 1:
+            raise ValueError('Part number must be positive integer')
+        return v
+
+class PartListOutline(BaseModel):
+    parts: List[PartOnlyOutline] = Field(..., description="List of book parts")
+    
+    @validator('parts', pre=True)
+    def ensure_list(cls, v):
+        """Handle different output formats for Pydantic V1"""
+        if isinstance(v, dict):
+            # Convert dict to list of parts
+            if 'parts' in v:
+                return v['parts']
+            # Handle parts as dictionary values
+            return list(v.values())
+        elif isinstance(v, str):
+            # Try to parse JSON string
+            try:
+                data = json.loads(v)
+                if 'parts' in data:
+                    return data['parts']
+                return data
+            except json.JSONDecodeError:
+                pass
+        return v
+    
+    @validator('parts')
+    def check_min_parts(cls, v):
+        """Ensure at least 3 parts are generated"""
+        if len(v) < 3:
+            raise ValueError('At least 3 parts are required')
+        return v
+
+class ChapterListOutline(BaseModel):
+    """A Pydantic model for a list of chapters for a single part."""
+    chapters: List[ChapterOutline]
+
+
+# --- Original Schemas for Final Assembly ---
 
 class PartOutline(BaseModel):
-    """Defines the structure for a single part of the book, which contains multiple chapters."""
-    part_number: int = Field(..., description="The sequential number of the part (e.g., 1, 2, 3).")
-    title: str = Field(..., description="The thematic title of this part of the book.")
-    summary: str = Field(..., description="A brief summary of what this part of the book will cover and how its chapters connect.")
+    """Defines a part of the book, which contains multiple chapters."""
+    part_number: int
+    title: str
+    summary: str
     chapters: List[ChapterOutline]
 
 class BookOutline(BaseModel):
     """The complete, final, and structured outline for the entire book."""
     parts: List[PartOutline]
 
+# NEW: Schema for the finalization request body
+class FinalizationRequest(BaseModel):
+    task_type: str = Field(..., description="The type of finalization task to run, e.g., 'introduction' or 'conclusion'.")
+
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\service.py ---
+# src/crew/service.py
 import asyncio
 import uuid
-from sqlalchemy.ext.asyncio import AsyncSession
-from crewai import Crew
+from typing import Any, Dict
+from decimal import Decimal # Needed for log_crew_run's local calculations
 
-# Import the new DB model
-from .models import CrewRunLog
-from src.project.models import Project, Part, Chapter
-from .pricing import calculate_cost
+# NEW IMPORT: Circuit Breaker
+#from circuitbreaker import CircuitBreaker, CircuitBreakerError
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select # Use future select for cleaner syntax
+from sqlalchemy import update # Use update for project total_cost update
+from sqlalchemy.orm import selectinload # For get_part_by_id, get_chapter_by_id
+
+# NEW IMPORTS for openai-agents
+from agents import Runner, RunResult # Make sure 'agents' is correctly importable
+
+# Make sure these are the new Agent instances you defined in agents.py
+# If you defined architect_chapter_agent, you'd import it here too.
+from .agents import (
+    AGENT_INSTANCES,
+    architect_part_agent,
+    architect_chapter_agent, # NEW IMPORT
+    continuity_editor_agent,
+    historian_agent,
+    technologist_agent,
+    philosopher_agent,
+    theorist_agent,
+    StringOutput
+)
+
 from src.core.config import settings
-from .agents import create_architect_agent, AGENT_FACTORIES
-from .tasks import create_outline_task, create_chapter_writing_task
-from src.project.service import get_project_by_id, get_chapter_by_id, update_chapter_content
-from .schemas import BookOutline
+from src.project.models import Project, Part, Chapter
+from src.project.service import (
+    get_chapter_by_id, get_project_by_id, get_part_by_id,
+    get_project_with_details, update_chapter_content
+)
+# REMOVE: from pydantic import BaseModel, Field, validator, ValidationError
+from .schemas import PartListOutline, ChapterListOutline # Ensure all required schemas are here
+
+# REMOVE all imports related to tasks.py, e.g.:
+# from .tasks import (
+#     prepare_part_generation_inputs,
+#     prepare_chapter_detailing_inputs,
+#     prepare_chapter_writing_inputs,
+#     prepare_finalization_inputs,
+#     prepare_transition_analysis_inputs
+# )
+from .models import CrewRunLog
+from .pricing import calculate_cost
 
 async def log_crew_run(
     session: AsyncSession,
     project_id: uuid.UUID,
     initiating_task_name: str,
-    usage_metrics: dict,
+    # This usage_metrics parameter will now always be the raw RunResult object
+    # from the calling function (e.g., `run_result`).
+    usage_metrics: Any,
 ):
-    """
-    Logs the metrics of a completed crew run and updates the project's total cost.
-    """
-    if not usage_metrics:
-        print(f"⚠️ Could not log crew run for '{initiating_task_name}': No usage metrics provided.")
+    """Logs the metrics of a completed LLM run."""
+    # Ensure we have a valid RunResult object and it has raw_responses
+    if not usage_metrics or not hasattr(usage_metrics, 'raw_responses') or not usage_metrics.raw_responses:
+        print(f"⚠️ Could not log run for '{initiating_task_name}': Invalid RunResult or no raw_responses found.")
         return
 
-    prompt_tokens = usage_metrics.get("prompt_tokens", 0)
-    completion_tokens = usage_metrics.get("completion_tokens", 0)
-    total_tokens = usage_metrics.get("total_tokens", 0)
+    # Extract the specific response (assuming the first one for simplicity for now)
+    # and get its usage attribute.
+    response_usage = getattr(usage_metrics.raw_responses[0], 'usage', None)
 
+    if not response_usage:
+        print(f"⚠️ Could not log run for '{initiating_task_name}': No usage data found in raw_response.")
+        return
+
+    prompt_tokens = 0
+    completion_tokens = 0
+
+    # Now extract from the 'response_usage' object which is of type 'Usage'
+    if hasattr(response_usage, 'input_tokens'):
+        prompt_tokens = response_usage.input_tokens
+    if hasattr(response_usage, 'output_tokens'):
+        completion_tokens = response_usage.output_tokens
+
+    # Fallback for older OpenAI API keys if necessary, but input/output_tokens are common in new APIs
+    # (This part might be less necessary if openai-agents consistently uses input/output_tokens)
+    elif isinstance(response_usage, dict): # In case it's a dict for some reason
+        prompt_tokens = response_usage.get('input_tokens', 0)
+        completion_tokens = response_usage.get('output_tokens', 0)
+        if prompt_tokens == 0 and completion_tokens == 0:
+             prompt_tokens = response_usage.get('prompt_tokens', 0)
+             completion_tokens = response_usage.get('completion_tokens', 0)
+
+
+    total_tokens = prompt_tokens + completion_tokens
+
+    # Corrected: Use settings.DEFAULT_OPENAI_MODEL_NAME for the model used in this cost calculation
     run_cost = calculate_cost(
-        model_name=settings.OPENAI_MODEL_NAME,
+        model_name=settings.DEFAULT_OPENAI_MODEL_NAME,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
+
     new_log = CrewRunLog(
         project_id=project_id, initiating_task_name=initiating_task_name,
-        model_name=settings.OPENAI_MODEL_NAME, prompt_tokens=prompt_tokens,
+        model_name=settings.DEFAULT_OPENAI_MODEL_NAME, prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens, total_tokens=total_tokens,
         total_cost=run_cost
     )
     session.add(new_log)
-    update_stmt = (
-        Project.__table__.update().where(Project.id == project_id)
-        .values(total_cost=Project.total_cost + run_cost).returning(Project.total_cost)
+
+    # Update project total cost
+    await session.execute(
+        update(Project)
+        .where(Project.id == project_id)
+        .values(total_cost=Project.total_cost + run_cost)
     )
-    result = await session.execute(update_stmt)
-    new_total_project_cost = result.scalar_one_or_none()
+
     await session.commit()
+    print(f"📊 Run Logged: '{initiating_task_name}' - Tokens: {total_tokens}, Cost: ${run_cost:.6f}")
 
-    print("--------------------------------------------------")
-    print(f"📊 Crew Run Logged for Project: {project_id}")
-    print(f"   - Initiating Task: {initiating_task_name}")
-    print(f"   - Run Cost:         ${run_cost:.8f}")
-    if new_total_project_cost is not None:
-        print(f"   - Project Total Cost: ${new_total_project_cost:.8f}")
-    print("--------------------------------------------------")
+async def run_part_generation_crew(session: AsyncSession, project_id: uuid.UUID) -> bool:
+    print(f"🚀 Starting Part generation for project: {project_id}")
+    project = None # Initialize project outside try to ensure it's defined for except block if needed
+    try:
+        project = await get_project_by_id(session, project_id=project_id)
+        if not project:
+            print(f"❌ Part generation failed: Project {project_id} not found.")
+            return False
+        if not project.raw_blueprint:
+            print(f"❌ Part generation failed: Project {project_id} has no raw blueprint defined.")
+            return False
 
-async def run_outline_generation_crew(session: AsyncSession, project_id: uuid.UUID) -> None:
-    """Assembles and runs the crew for generating a book outline."""
-    print(f"🚀 Starting Pydantic-constrained outline generation for project: {project_id}")
-    project = await get_project_by_id(session, project_id=project_id)
-    if not project: return
+        # Direct input for the agent is the raw blueprint string
+        agent_input = project.raw_blueprint
 
-    architect = create_architect_agent(project_data=project)
-    task = create_outline_task(agent=architect, project_data=project)
-    crew = Crew(agents=[architect], tasks=[task], verbose=True)
-    
-    # 💡 **FIX**: Run the blocking kickoff() method in a separate thread
-    crew_result = await asyncio.to_thread(crew.kickoff)
-    structured_outline = crew_result
+        print(f"🤖 Architect AI preparing part outline for project {project_id}...")
 
-    if isinstance(structured_outline, BookOutline):
-        print(f"✅ Pydantic outline generated successfully for project: {project_id}")
-        # Database saving logic
-        for part_outline in structured_outline.parts:
-            new_part = Part(project_id=project.id, part_number=part_outline.part_number, title=part_outline.title, summary=part_outline.summary)
-            session.add(new_part)
-            await session.flush()
-            for chapter_outline in part_outline.chapters:
-                new_chapter = Chapter(part_id=new_part.id, chapter_number=chapter_outline.chapter_number, title=chapter_outline.title, summary=chapter_outline.summary, suggested_agent=chapter_outline.suggested_agent)
-                session.add(new_chapter)
+        # Execute the agent, expecting PartListOutline as output
+        # `final_output_as` performs the Pydantic validation defined in architect_part_agent's output_type
+        run_result: RunResult = await Runner.run(architect_part_agent, agent_input)
+        part_list_outline: PartListOutline = run_result.final_output_as(PartListOutline)
+
+        # The schema (PartListOutline) has a validator for `len(parts) < 3`.
+        # If the output doesn't meet this, `final_output_as` would already have failed.
+        # So, the check here becomes primarily for empty list if final_output_as somehow returns it,
+        # or for additional business logic not covered by the schema.
+        if not part_list_outline.parts: # Check if the list of parts is empty
+            print(f"⚠️ Part generation failed: Agent returned an empty 'parts' list despite schema. Retrying or manual intervention may be needed.")
+            return False
+
+        # The schema validator for PartListOutline should ensure at least 3 parts.
+        # This check confirms that the validation was respected and provides a clear message.
+        if len(part_list_outline.parts) < 3:
+            print(f"⚠️ Part generation failed: Agent generated only {len(part_list_outline.parts)} parts, expected at least 3 as per schema. Review agent instructions or model.")
+            # Depending on strictness, you might return False here if this is a hard requirement
+            # even if the Pydantic model didn't catch it (which it should have).
+            # For now, it's a strong warning.
+            pass # Continue if you want to proceed with fewer than 3, or return False
+
+        # Print success details
+        print(f"🔍 Generated {len(part_list_outline.parts)} parts:")
+        for i, part_data in enumerate(part_list_outline.parts[:3]):  # Print first 3 parts
+            print(f"  Part {part_data.part_number}: {part_data.title}")
+            print(f"  Summary: {part_data.summary[:100]}...")
+            if i == 2 and len(part_list_outline.parts) > 3:
+                print(f"  ... and {len(part_list_outline.parts)-3} more parts")
+
+        # Convert to dictionary and save to project
+        # This now correctly dumps the entire PartListOutline object
+        project.structured_outline = part_list_outline.model_dump()
+        project.status = "PARTS_PENDING_VALIDATION"
         await session.commit()
-        print(f"✅ Database updated with new structure for project: {project_id}")
-        
-        if crew.usage_metrics:
-            task_name = f"Chapter of book outline..."
-            await log_crew_run(session=session, project_id=project.id,  initiating_task_name=task_name,usage_metrics=crew.usage_metrics)
-    else:
-        print(f"❌ Outline generation failed or returned unexpected type: {type(structured_outline)}")
+        print(f"✅ Part structure generated for project {project_id}. Status: {project.status}")
 
-async def run_chapter_generation_crew(session: AsyncSession, chapter_id: uuid.UUID) -> None:
-    """
-    Assembles and runs a crew to write the content for a single chapter.
-    It dynamically selects the correct agent based on the chapter's 'suggested_agent' field,
-    and logs the cost of the entire crew run.
-    """
-    print(f"🚀 Starting content generation for chapter: {chapter_id}")
-
-    # 1. Fetch all necessary context in one go
-    chapter = await get_chapter_by_id(session, chapter_id=chapter_id)
-    if not chapter or not chapter.part or not chapter.part.project:
-        print(f"❌ Chapter context could not be loaded for ID {chapter_id}. Aborting.")
-        return
-
-    # 2. Dynamically select the correct agent factory
-    project = chapter.part.project
-    agent_factory = AGENT_FACTORIES.get(chapter.suggested_agent)
-    if not agent_factory:
-        print(f"❌ Unknown agent '{chapter.suggested_agent}' suggested for chapter {chapter_id}. Aborting.")
-        return
-
-    # 3. Assemble the agent and task
-    agent_to_use = agent_factory(project_data=project)
-    task = create_chapter_writing_task(agent=agent_to_use, chapter_data=chapter)
-
-    # 4. Create and run the crew
-    crew = Crew(agents=[agent_to_use], tasks=[task], verbose=True)
-    
-    # 💡 **FIX**: Run the blocking kickoff() method in a separate thread
-    result = await asyncio.to_thread(crew.kickoff)
-    crew_output = result.raw
-    # 5. Process the result
-    if isinstance(crew_output, str):
-        chapter_content = crew_output
-        print(f"✅ Content generated successfully for chapter: {chapter_id}")
-        
-        # Update the chapter's content in the database
-        await update_chapter_content(session, chapter_id=chapter.id, content=chapter_content)
-        
-        # 6. Log the cost of the entire crew run
-        if crew.usage_metrics:
-            # Create a descriptive name for the log entry
-            task_name = f"Chapter Generation: Ch {chapter.chapter_number} - {chapter.title[:30]}..."
+        # NEW Check for usage data within raw_responses
+        if hasattr(run_result, 'raw_responses') and run_result.raw_responses and hasattr(run_result.raw_responses[0], 'usage'):
             await log_crew_run(
                 session=session,
                 project_id=project.id,
-                initiating_task_name=task_name,
-                usage_metrics=crew.usage_metrics
+                initiating_task_name="Phase 1: Part Generation",
+                usage_metrics=run_result # Pass the entire RunResult object
             )
-    else:
-        print(f"❌ Content generation failed for chapter: {chapter_id}. Output was not valid.")
+        else:
+            print(f"⚠️ No usage metrics available in raw_responses for Part Generation run for project {project_id}.")
+
+        return True
+
+    except Exception as e:
+        # Catch any exceptions during agent execution or Pydantic parsing
+        project_status_message = ""
+        if project:
+            # Update project status to reflect failure
+            project.status = "PART_GENERATION_FAILED"
+            try: # Commit is crucial here
+                await session.commit()
+                project_status_message = f" for project {project.id}. Status set to {project.status}."
+            except Exception as commit_e:
+                print(f"❌ Failed to commit status update for project {project.id}: {commit_e}")
+                project_status_message = f" for project {project.id} (status update failed)."
+
+        print(f"🔥 Critical error during Part generation{project_status_message}: {str(e)}")
+        import traceback
+        traceback.print_exc() # Print full traceback for debugging
+        return False
+
+
+async def run_chapter_detailing_crew(session: AsyncSession, part_id: uuid.UUID) -> bool:
+    print(f"🚀 Starting chapter detailing for part: {part_id}")
+    part = None # Initialize part for potential error handling later
+    try:
+        part = await get_part_by_id(session, part_id=part_id)
+        if not part:
+            print(f"❌ Chapter detailing failed: Part {part_id} not found.")
+            return False
+        
+        if not part.title or not part.summary:
+            print(f"❌ Chapter detailing failed: Part {part_id} is missing title or summary. Cannot detail chapters.")
+            return False
+
+        # Prepare a single string input for the agent
+        # We'll re-use architect_part_agent, ensure its instructions in agents.py
+        # are broad enough, or create a specific architect_chapter_agent.
+        agent_input = (
+            f"Generate a detailed chapter outline for a book part. "
+            f"The part title is '{part.title}' and its summary is '{part.summary}'.\n\n"
+            "Provide a list of chapters, each chapter must have:\n"
+            "- chapter_number: Positive integer, sequential.\n"
+            "- title: A descriptive chapter title.\n"
+            "- brief: A structured brief containing:\n"
+            "  - thesis_statement: The central argument (string).\n"
+            "  - narrative_arc: The chapter's structure (string).\n"
+            "  - required_inclusions: List of key concepts to include (list of strings).\n"
+            "  - key_questions_to_answer: List of questions the chapter must answer (list of strings).\n"
+            "- suggested_agent: The name of the specialist AI agent best suited to write this chapter (e.g., 'Historian AI', 'Technologist AI', 'Philosopher AI', 'Theorist AI'). "
+            "Choose from: 'Historian AI', 'Technologist AI', 'Philosopher AI', 'Theorist AI'."
+            "\n\nOutput ONLY JSON matching the ChapterListOutline schema. Ensure at least 3 chapters are generated."
+        )
+
+        print(f"🤖 Architect AI preparing chapter outline for part {part.part_number} - '{part.title}'...")
+
+        # Execute the agent, expecting ChapterListOutline as output
+        run_result: RunResult = await Runner.run(architect_chapter_agent, agent_input) # <--- CRITICAL CHANGE HERE
+        
+        # Extract the structured output. If output doesn't conform to schema, error will be caught.
+        chapter_list_outline: ChapterListOutline = run_result.final_output_as(ChapterListOutline)
+
+        if not chapter_list_outline.chapters:
+            print(f"⚠️ Chapter detailing failed: Agent returned an empty 'chapters' list.")
+            return False
+        
+        # This check is less strict than PartListOutline, but good to have a minimum
+        if len(chapter_list_outline.chapters) < 3:
+             print(f"⚠️ Chapter detailing warning: Agent generated only {len(chapter_list_outline.chapters)} chapters for part {part.id}. Consider reviewing agent output or instructions.")
+
+        project = part.project # Get the related project from the part
+
+        # Update the project's structured_outline with the new chapter data for this part
+        if project.structured_outline is None:
+            project.structured_outline = {}
+        
+        # This needs to update the existing part entry in the structured_outline
+        # or add it if it somehow wasn't there (though it should be after part generation)
+        project.structured_outline[str(part.id)] = chapter_list_outline.model_dump()
+        
+        part.status = "CHAPTERS_PENDING_VALIDATION"
+        
+        session.add(project) # Ensure project is marked for update
+        session.add(part)    # Ensure part is marked for update
+        await session.commit()
+        
+        print(f"✅ Chapter structure generated for part {part.id}. Status: {part.status}")
+
+        # NEW Check for usage data within raw_responses
+        if hasattr(run_result, 'raw_responses') and run_result.raw_responses and hasattr(run_result.raw_responses[0], 'usage'):
+            await log_crew_run(
+                session=session,
+                project_id=project.id,
+                initiating_task_name="Phase 2: Chapter Detailing for Part {part.part_number}",
+                usage_metrics=run_result # Pass the entire RunResult object
+            )
+        else:
+            print(f"⚠️ No usage metrics available for Chapter Detailing run for part {part_id}.")
+
+        return True
+
+    except Exception as e:
+        part_status_message = ""
+        if part:
+            part.status = "CHAPTER_DETAILING_FAILED"
+            try:
+                await session.commit()
+                part_status_message = f" for part {part.id}. Status set to {part.status}."
+            except Exception as commit_e:
+                print(f"❌ Failed to commit status update for part {part.id}: {commit_e}")
+                part_status_message = f" for part {part.id} (status update failed)."
+        
+        print(f"🔥 Critical error during Chapter detailing{part_status_message}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False # Indicate failure
+
+
+async def run_chapter_generation_crew(session: AsyncSession, chapter_id: uuid.UUID) -> bool:
+    print(f"🚀 Starting content generation for chapter: {chapter_id}")
+    chapter = None # Initialize chapter for error handling
+    project_id = None # Initialize project_id for logging in case chapter not found
+    try:
+        chapter = await get_chapter_by_id(session, chapter_id=chapter_id)
+        if not chapter or not chapter.part or not chapter.part.project:
+            print(f"❌ Chapter content generation failed: Chapter {chapter_id} not found or is missing relationships.")
+            return False
+
+        project_id = chapter.part.project.id # Get project_id for logging
+        
+        # Retrieve the specific agent instance based on suggested_agent
+        agent_instance = AGENT_INSTANCES.get(chapter.suggested_agent)
+        if not agent_instance:
+            print(f"❌ Chapter content generation failed: Agent instance not found for '{chapter.suggested_agent}'.")
+            chapter.status = "AGENT_NOT_FOUND" # Update status to reflect issue
+            await session.commit()
+            return False
+
+        if not chapter.title or not chapter.brief:
+            print(f"❌ Chapter content generation failed: Chapter {chapter_id} is missing title or brief.")
+            chapter.status = "BRIEF_MISSING"
+            await session.commit()
+            return False
+
+        # Prepare a single string input for the agent based on the chapter brief
+        # Reconstruct the brief into a readable string for the LLM
+        brief_data = chapter.brief
+        agent_input = (
+            f"Chapter Title: {chapter.title}\n\n"
+            f"Brief:\n"
+            f"- Thesis Statement: {brief_data.get('thesis_statement', 'N/A')}\n"
+            f"- Narrative Arc: {brief_data.get('narrative_arc', 'N/A')}\n"
+            f"- Required Inclusions: {', '.join(brief_data.get('required_inclusions', ['N/A']))}\n"
+            f"- Key Questions to Answer: {', '.join(brief_data.get('key_questions_to_answer', ['N/A']))}\n\n"
+            "Write the full content of this chapter. Ensure it adheres to the brief."
+        )
+        
+        print(f"✍️ {chapter.suggested_agent} generating content for chapter {chapter.chapter_number} - '{chapter.title}'...")
+
+        # Execute the agent, expecting StringOutput as output
+        run_result: RunResult = await Runner.run(agent_instance, agent_input)
+        
+        # Extract the string content
+        content_output: StringOutput = run_result.final_output_as(StringOutput)
+        content = content_output.text if content_output else None
+        
+        if content:
+            await update_chapter_content(session, chapter_id=chapter.id, content=content)
+            print(f"✅ Content generated successfully for chapter: {chapter_id}")
+            
+            # Log token usage
+            # if run_result.usage:
+            #     task_name = f"Chapter: Ch {chapter.chapter_number} - {chapter.title[:30]}..."
+            #     await log_crew_run(
+            #         session=session,
+            #         project_id=project_id,
+            #         initiating_task_name=task_name,
+            #         usage_metrics=run_result.usage
+            #     )
+            # else:
+            #     print(f"⚠️ No usage metrics available for Chapter Content Generation run for chapter {chapter_id}.")
+            # return True
+                        # NEW Check for usage data within raw_responses
+            if hasattr(run_result, 'raw_responses') and run_result.raw_responses and hasattr(run_result.raw_responses[0], 'usage'):
+                task_name = f"Chapter: Ch {chapter.chapter_number} - {chapter.title[:30]}..."
+                await log_crew_run(
+                    session=session,
+                    project_id=project_id,
+                    initiating_task_name=task_name,
+                    usage_metrics=run_result # Pass the entire RunResult object
+                )
+            else:
+                print(f"⚠️ No usage metrics available for Chapter Content Generation run for chapter {chapter_id}.")
+
+            return True
+
+
+
+        else:
+            print(f"❌ Content generation failed for chapter: {chapter_id}. Agent returned no content.")
+            chapter.status = "CONTENT_GEN_FAILED" # Update status
+            await session.commit()
+            return False
+
+    except Exception as e:
+        chapter_status_message = ""
+        if chapter:
+            chapter.status = "CONTENT_GEN_ERROR" # General error state
+            try:
+                await session.commit()
+                chapter_status_message = f" for chapter {chapter.id}. Status set to {chapter.status}."
+            except Exception as commit_e:
+                print(f"❌ Failed to commit status update for chapter {chapter.id}: {commit_e}")
+                chapter_status_message = f" for chapter {chapter.id} (status update failed)."
+        
+        print(f"🔥 Critical error during Chapter content generation{chapter_status_message}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def run_transition_analysis_crew(session: AsyncSession, chapter_id: uuid.UUID) -> bool:
+    print(f"🚀 Starting transition analysis for chapter: {chapter_id}")
+    current_chapter = None # Initialize for error handling
+    project_id = None # Initialize for logging
+    try:
+        current_chapter = await get_chapter_by_id(session, chapter_id=chapter_id)
+        if not current_chapter or not current_chapter.part:
+            print(f"❌ Transition analysis failed: Could not load chapter {chapter_id} or its part.")
+            return False
+
+        project_id = current_chapter.part.project_id # Get project_id for logging
+
+        # Get all chapters in the part
+        part_chapters_stmt = select(Chapter).where(
+            Chapter.part_id == current_chapter.part_id
+        ).order_by(Chapter.chapter_number)
+        
+        result = await session.execute(part_chapters_stmt)
+        chapters_in_part = result.scalars().all()
+        
+        try:
+            current_index = [c.id for c in chapters_in_part].index(current_chapter.id)
+        except ValueError:
+            print(f"❌ Transition analysis failed: Could not find chapter {chapter_id} in its part's list.")
+            return False
+
+        if current_index == 0:
+            print(f"ℹ️ Chapter {chapter_id} is the first in its part. No transition analysis needed.")
+            current_chapter.transition_feedback = "First chapter - no transition needed."
+            current_chapter.status = "TRANSITION_DONE" # Indicate analysis completed/not needed
+            await session.commit()
+            return True
+
+        preceding_chapter = chapters_in_part[current_index - 1]
+
+        # CRITICAL FIX: Changed from silent return to raising an error
+        if not current_chapter.content:
+            error_msg = f"❌ Transition analysis failed: Current chapter {current_chapter.id} content is missing."
+            print(error_msg)
+            current_chapter.status = "CONTENT_MISSING_FOR_TRANSITION"
+            await session.commit()
+            raise ValueError(error_msg)
+        
+        if not preceding_chapter.content:
+            error_msg = f"❌ Transition analysis failed: Preceding chapter {preceding_chapter.id} content is missing."
+            print(error_msg)
+            current_chapter.status = "CONTENT_MISSING_FOR_TRANSITION" # Apply to current chapter as it depends on preceding
+            await session.commit()
+            raise ValueError(error_msg)
+
+        # Get the specific continuity editor agent instance
+        agent_instance = continuity_editor_agent
+
+        # Prepare a single string input, focusing on crucial parts of content
+        agent_input = (
+            f"Analyze the transition between two chapters and provide actionable feedback to improve narrative flow.\n\n"
+            f"Previous Chapter Ending (last 500 chars):\n{preceding_chapter.content[-500:]}\n\n"
+            f"Current Chapter Beginning (first 500 chars):\n{current_chapter.content[:500]}"
+        )
+        
+        print(f"✂️ Continuity Editor AI analyzing transition for chapter {current_chapter.chapter_number}...")
+
+        # Execute the agent, expecting StringOutput as output
+        run_result: RunResult = await Runner.run(agent_instance, agent_input)
+        
+        # Extract the string content
+        feedback_output: StringOutput = run_result.final_output_as(StringOutput)
+        feedback = feedback_output.text if feedback_output else None
+
+        if feedback:
+            current_chapter.transition_feedback = feedback
+            current_chapter.status = "TRANSITION_ANALYZED" # New status
+            await session.commit()
+            print(f"✅ Transition analysis complete for chapter: {chapter_id}. Feedback saved.")
+            
+            # Log token usage
+            if run_result.usage:
+                task_name = f"Transition: Ch {current_chapter.chapter_number}"
+                await log_crew_run(
+                    session=session,
+                    project_id=project_id,
+                    initiating_task_name=task_name,
+                    usage_metrics=run_result.usage
+                )
+            else:
+                print(f"⚠️ No usage metrics available for Transition Analysis run for chapter {chapter_id}.")
+            return True
+        else:
+            print(f"❌ Transition analysis failed for chapter: {chapter_id}. Agent returned no feedback.")
+            current_chapter.status = "TRANSITION_ANALYSIS_FAILED"
+            await session.commit()
+            return False
+
+    except Exception as e:
+        chapter_status_message = ""
+        if current_chapter:
+            current_chapter.status = "TRANSITION_ANALYSIS_ERROR" # General error state
+            try:
+                await session.commit()
+                chapter_status_message = f" for chapter {current_chapter.id}. Status set to {current_chapter.status}."
+            except Exception as commit_e:
+                print(f"❌ Failed to commit status update for chapter {current_chapter.id}: {commit_e}")
+                chapter_status_message = f" for chapter {current_chapter.id} (status update failed)."
+        
+        print(f"🔥 Critical error during Transition analysis{chapter_status_message}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def run_finalization_crew(session: AsyncSession, project_id: uuid.UUID, task_type: str) -> bool:
+    print(f"🚀 Starting Finalization Task ({task_type}) for project: {project_id}")
+    project = None # Initialize for error handling
+    try:
+        project = await get_project_with_details(session, project_id=project_id)
+        if not project:
+            print(f"❌ Finalization failed: Project {project_id} not found.")
+            return False
+
+        # Build full book content
+        full_book_content = ""
+        has_content = False # Flag to check if any chapter content was found
+        for part in sorted(project.parts, key=lambda p: p.part_number):
+            full_book_content += f"\n\n--- PART {part.part_number}: {part.title} ---\n"
+            full_book_content += f"Summary: {part.summary}\n"
+            for chapter in sorted(part.chapters, key=lambda c: c.chapter_number):
+                if chapter.content:
+                    full_book_content += f"\n### CHAPTER {chapter.chapter_number}: {chapter.title} ###\n"
+                    full_book_content += chapter.content
+                    has_content = True
+
+        if not has_content: # Check the flag
+            print(f"❌ Finalization failed: No content found for project {project_id} to generate {task_type}.")
+            project.status = "NO_CONTENT_FOR_FINALIZATION"
+            await session.commit()
+            return False
+
+        # Get the theorist agent instance
+        agent_instance = theorist_agent # Direct instance
+
+        # Prepare input for theorist agent
+        agent_input = (
+            f"You are writing the {task_type} for a book.\n"
+            f"The full content of the book is provided below. Synthesize it into a compelling {task_type}.\n\n"
+            f"Book Content:\n{full_book_content}"
+        )
+        
+        print(f"🎓 Theorist AI generating {task_type} for project {project_id}...")
+
+        # Execute the agent, expecting StringOutput as output
+        run_result: RunResult = await Runner.run(agent_instance, agent_input)
+        
+        # Extract the string content
+        result_text_output: StringOutput = run_result.final_output_as(StringOutput)
+        result_text = result_text_output.text if result_text_output else None
+
+        if result_text:
+            # Determine part_number and title for the final chapter (Introduction/Conclusion)
+            if task_type.lower() == 'introduction':
+                part_number = 0 # Conventionally, intro is part 0 or handled as a special chapter
+                chapter_number = 1
+                title = "Introduction"
+            elif task_type.lower() == 'conclusion':
+                # Find the maximum part number and add 1 for the conclusion's part
+                part_number = max((p.part_number for p in project.parts), default=0) + 1
+                chapter_number = 1
+                title = "Conclusion"
+            else:
+                print(f"❌ Finalization failed: Invalid task_type '{task_type}'. Must be 'introduction' or 'conclusion'.")
+                return False
+
+            # Find or create a dedicated part for the finalization chapter
+            final_part = next((p for p in project.parts if p.part_number == part_number), None)
+            if not final_part:
+                final_part = Part(
+                    project_id=project.id,
+                    part_number=part_number,
+                    title=f"The Book's {title}", # Make it clear this is an auto-generated part
+                    summary=f"This part contains the book's {task_type}."
+                )
+                session.add(final_part)
+                await session.flush() # Flush to get final_part.id
+
+            # Create final chapter
+            new_chapter = Chapter(
+                part_id=final_part.id,
+                chapter_number=chapter_number,
+                title=title,
+                content=result_text,
+                status="COMPLETE",
+                suggested_agent="Theorist AI" # The agent that generated it
+            )
+            session.add(new_chapter)
+            project.status = "COMPLETE" # Mark project as fully complete
+            await session.commit()
+            print(f"✅ {task_type} created successfully for project {project_id}. Project status: {project.status}.")
+
+            # Log token usage
+            if run_result.usage:
+                await log_crew_run(
+                    session=session,
+                    project_id=project.id,
+                    initiating_task_name=f"Phase 5: {task_type} Generation",
+                    usage_metrics=run_result.usage
+                )
+            else:
+                print(f"⚠️ No usage metrics available for {task_type} Generation run for project {project_id}.")
+            return True
+        else:
+            print(f"❌ {task_type} generation failed for project: {project_id}. Agent returned no content.")
+            project.status = f"{task_type.upper()}_GEN_FAILED"
+            await session.commit()
+            return False
+
+    except Exception as e:
+        project_status_message = ""
+        if project:
+            project.status = f"{task_type.upper()}_GEN_ERROR" # General error state
+            try:
+                await session.commit()
+                project_status_message = f" for project {project.id}. Status set to {project.status}."
+            except Exception as commit_e:
+                print(f"❌ Failed to commit status update for project {project.id}: {commit_e}")
+                project_status_message = f" for project {project.id} (status update failed)."
+        
+        print(f"🔥 Critical error during {task_type} generation{project_status_message}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\tasks.py ---
 # src/crew/tasks.py
-from crewai import Task, Agent
-from src.project.schemas import ProjectRead, ChapterRead # Import ChapterRead
-from src.crew.agents import AGENT_ROSTER
-from src.crew.schemas import BookOutline # Import our new Pydantic output model
 
+from typing import Dict
 
-def format_master_directive(project: ProjectRead) -> str:
-    """Dynamically builds the Master Directive from project data."""
-    directive_lines = [
-        "**Master Directive:** You are an expert contributor to a book being written in 24 hours.",
-        f"**Book Title (Working):** {project.working_title}"
-    ]
-    for key, value in project.guiding_principles.items():
-        formatted_key = key.replace('_', ' ').title()
-        directive_lines.append(f"**{formatted_key}:** {value}")
-    return "\n".join(directive_lines)
+from src.project.schemas import ChapterRead
+from .schemas import PartListOutline, ChapterListOutline
+from .agents import AGENT_ROSTER
+# src/crew/tasks.py
 
-# In src/crew/tasks.py
-# We no longer need to import BookOutline here for the task definition
-# from src.crew.schemas import BookOutline 
+def prepare_part_generation_inputs(raw_blueprint: str) -> dict:
+    """Prepares inputs for the architect chain to generate book parts."""
+    return {
+        "raw_blueprint": raw_blueprint
+    }
 
-def create_outline_task(agent: Agent, project_data: ProjectRead) -> Task:
-    """
-    Creates a universal task for the Architect AI to design the book outline,
-    instructing it to return the output as a JSON string.
-    """
-    available_agents_str = "\n".join([f"- {name}: {desc}" for name, desc in AGENT_ROSTER.items()])
-    user_intent_str = str(project_data.blueprint)
+def prepare_chapter_detailing_inputs(part_title: str, part_summary: str) -> dict:
+    """Prepares inputs for the architect chain to generate chapter details."""
+    return {
+        "part_title": part_title,
+        "part_summary": part_summary
+    }
 
-    description = (
-        "You are the master Architect AI. Your task is to analyze the user's intent and produce the definitive, final book outline. "
-        "The user's input may be a simple idea or a highly detailed structure. Your job is to interpret their vision and create the best possible hierarchical structure organized into Parts and Chapters.\n\n"
-        "**User's Full Expression of Intent (Blueprint):**\n"
-        f"```json\n{user_intent_str}\n```"
-    )
+def prepare_chapter_writing_inputs(chapter_data: dict) -> dict:
+    """Prepares inputs for specialist chains to write chapter content."""
+    brief = chapter_data.get("brief", {})
+    return {
+        "title": chapter_data.get("title", ""),
+        "brief": (
+            f"- Chapter Thesis: {brief.get('thesis_statement', '')}\n"
+            f"- Narrative Arc: {brief.get('narrative_arc', '')}\n"
+            f"- Key Questions: {', '.join(brief.get('key_questions_to_answer', []))}\n"
+            f"- Required Inclusions: {', '.join(brief.get('required_inclusions', []))}"
+        )
+    }
 
-    expected_output = (
-        "Your final output MUST be a single, valid JSON object. Do not include any text, notes, or explanations outside of the JSON structure. The JSON should conform to the structure described in the 'Expected Output' section.\n\n"
-        "For the 'suggested_agent' field in each chapter, you MUST choose from the following list:\n"
-        f"{available_agents_str}\n\n"
-    )
+def prepare_transition_analysis_inputs(preceding_end: str, current_start: str) -> dict:
+    """Prepares inputs for continuity editor chain to analyze transitions."""
+    return {
+        "preceding_chapter_end": preceding_end[-500:],  # Last 500 chars
+        "current_chapter_start": current_start[:500]    # First 500 chars
+    }
 
-    return Task(
-        description=description,
-        # We now provide a string description of the expected output format.
-        expected_output=expected_output,
-        agent=agent,
-        output_pydantic=BookOutline
-    )
-
-def create_chapter_writing_task(agent: Agent, chapter_data: ChapterRead) -> Task:
-    """
-    Creates a task for a specialist agent to write a full chapter,
-    providing full context including the Part it belongs to.
-    """
-    # Access nested data for rich context
-    part_info = chapter_data.part
-    # The project data is now available via the part's relationship,
-    # but we need to fetch it first. The 'chapter_data' from the DB will have it.
-    
-    # We will assume the service layer provides the full project blueprint in the context
-    # for simplicity, let's pass project_data again.
-    
-    description = (
-        "You are a specialist writer contributing to a larger book project. "
-        "Your work must align with the Key Project Directives from your backstory.\n\n"
-        "## Your Assignment Context:\n"
-        f"- **You are writing for Part {part_info.part_number}: '{part_info.title}'**\n"
-        f"- **Part Summary:** {part_info.summary}\n\n"
-        "## Your Specific Chapter Task:\n"
-        f"- **Write Chapter {chapter_data.chapter_number}: '{chapter_data.title}'**\n"
-        f"- **Chapter Brief / Summary:**\n{chapter_data.summary}\n\n"
-        "Based on all this context, write the full, comprehensive content for your assigned chapter. "
-        "The tone should be consistent with the project's directives. "
-        "Produce only the raw text of the chapter itself, without any extra titles, summaries, or commentary."
-    )
-    
-    expected_output = (
-        "The full, complete text of the book chapter, written in a single block. The text should be well-researched, "
-        "eloquently written, and directly fulfill the requirements outlined in the "
-        "chapter brief and summary. Do not include 'Chapter X' titles or any other meta-text."
-    )
-
-    return Task(
-        description=description,
-        expected_output=expected_output,
-        agent=agent,
-    )
+def prepare_finalization_inputs(task_type: str, full_book_content: str) -> dict:
+    """Prepares inputs for theorist chain to write introduction/conclusion."""
+    return {
+        "task_type": task_type,
+        "full_book_content": full_book_content
+    }
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\worker.py ---
 # src/crew/worker.py
 import uuid
-from arq.connections import RedisSettings # Import RedisSettings
+from arq.connections import RedisSettings
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import AsyncSessionFactory
 from src.core.config import settings
-from .service import run_outline_generation_crew, run_chapter_generation_crew # Import new service
-
-# Import the task_queue instance
+from .service import (
+    run_part_generation_crew,
+    run_chapter_detailing_crew,
+    run_chapter_generation_crew,
+    run_transition_analysis_crew,
+    run_finalization_crew
+)
 from src.core.task_queue import task_queue
 
-
-# Configure the task queue with the global settings when this module is loaded
 task_queue.configure(settings.REDIS_URL)
 
-async def outline_generation_worker(ctx, project_id: uuid.UUID) -> dict:
-    """
-    ARQ worker function to generate a book outline.
-    This function is called by the ARQ process, not the main API.
-    """
-    session: AsyncSession = AsyncSessionFactory()
-    try:
-        await run_outline_generation_crew(session, project_id=project_id)
-        return {"status": "success", "project_id": str(project_id)}
-    except Exception as e:
-        # Basic error handling
-        print(f"Error during outline generation for project {project_id}: {e}")
-        return {"status": "error", "project_id": str(project_id), "error": str(e)}
-    finally:
-        await session.close()
+async def part_generation_worker(ctx, project_id: uuid.UUID) -> dict:
+    """Worker for generating book parts"""
+    async with AsyncSessionFactory() as session: # Correct way to manage session
+        try:
+            success = await run_part_generation_crew(session, project_id)
+            return {
+                "status": "success" if success else "failure",
+                "project_id": str(project_id)
+            }
+        except Exception as e:
+            print(f"❌ Part generation error for project {project_id}: {e}")
+            return {
+                "status": "error",
+                "project_id": str(project_id),
+                "error": str(e)
+            }
+
+
+async def chapter_detailing_worker(ctx, part_id: uuid.UUID) -> dict:
+    """Worker for generating chapter details"""
+    async with AsyncSessionFactory() as session: # Correct way to manage session
+        try:
+            await run_chapter_detailing_crew(session, part_id)
+            return {"status": "success", "part_id": str(part_id)}
+        except Exception as e:
+            print(f"❌ Chapter detailing error for part {part_id}: {e}")
+            return {
+                "status": "error",
+                "part_id": str(part_id),
+                "error": str(e)
+            }
+
 
 async def chapter_generation_worker(ctx, chapter_id: uuid.UUID) -> dict:
-    """ARQ worker function to generate content for a single chapter."""
-    session: AsyncSession = AsyncSessionFactory()
-    try:
-        await run_chapter_generation_crew(session, chapter_id=chapter_id)
-        return {"status": "success", "chapter_id": str(chapter_id)}
-    except Exception as e:
-        print(f"Error during chapter generation for {chapter_id}: {e}")
-        return {"status": "error", "chapter_id": str(chapter_id), "error": str(e)}
-    finally:
-        await session.close()
+    """Worker for generating chapter content"""
+    async with AsyncSessionFactory() as session: # Correct way to manage session
+        try:
+            await run_chapter_generation_crew(session, chapter_id)
+            return {"status": "success", "chapter_id": str(chapter_id)}
+        except Exception as e:
+            print(f"❌ Chapter generation error for {chapter_id}: {e}")
+            return {
+                "status": "error",
+                "chapter_id": str(chapter_id),
+                "error": str(e)
+            }
+
+
+async def transition_analysis_worker(ctx, chapter_id: uuid.UUID) -> dict:
+    """Worker for analyzing chapter transitions"""
+    async with AsyncSessionFactory() as session: # Correct way to manage session
+        try:
+            await run_transition_analysis_crew(session, chapter_id)
+            return {"status": "success", "chapter_id": str(chapter_id)}
+        except Exception as e:
+            print(f"❌ Transition analysis error for chapter {chapter_id}: {e}")
+            return {
+                "status": "error",
+                "chapter_id": str(chapter_id),
+                "error": str(e)
+            }
+
+
+async def finalization_worker(ctx, project_id: uuid.UUID, task_type: str) -> dict:
+    """Worker for writing introduction/conclusion"""
+    async with AsyncSessionFactory() as session: # Correct way to manage session
+        try:
+            await run_finalization_crew(session, project_id, task_type)
+            return {
+                "status": "success",
+                "project_id": str(project_id),
+                "task": task_type
+            }
+        except Exception as e:
+            print(f"❌ Finalization error ({task_type}) for project {project_id}: {e}")
+            return {
+                "status": "error",
+                "project_id": str(project_id),
+                "error": str(e)
+            }
 
 class WorkerSettings:
-    """
-    Defines the settings for the ARQ worker.
-    This class is referenced when starting the worker from the command line.
-    """
-    # List of functions that the worker can execute.
-    functions = [outline_generation_worker, chapter_generation_worker]
-    # Connection settings for Redis.
-    # Reference the centrally configured RedisSettings object
+    """ARQ worker settings with all task handlers"""
+    functions = [
+        part_generation_worker,
+        chapter_detailing_worker,
+        chapter_generation_worker,
+        transition_analysis_worker,
+        finalization_worker
+    ]
     redis_settings = task_queue.redis_settings
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\crew\__init__.py ---
@@ -745,8 +1459,10 @@ from fastapi import APIRouter, Depends, status
 from src.core.task_queue import task_queue
 from src.project.schemas import ChapterRead
 from src.crew.schemas import TaskStatus
-# It needs the chapter dependency
-from .dependencies import valid_chapter_id 
+from src.project.dependencies import valid_chapter_id
+
+# NEW: Import RateLimiter
+from fastapi_limiter.depends import RateLimiter
 
 router = APIRouter(prefix="/chapters", tags=["Chapters"])
 
@@ -754,10 +1470,10 @@ router = APIRouter(prefix="/chapters", tags=["Chapters"])
     "/{chapter_id}/generate",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=TaskStatus,
-    summary="Queue Chapter Content Generation"
+    summary="Queue Chapter Content Generation",
+    dependencies=[Depends(RateLimiter(times=20, seconds=60))] # NEW: 20 requests per minute (can be many chapters)
 )
 async def queue_chapter_generation(
-    # This is where valid_chapter_id is used
     chapter: ChapterRead = Depends(valid_chapter_id),
 ):
     """
@@ -767,7 +1483,28 @@ async def queue_chapter_generation(
     job = await task_queue.enqueue("chapter_generation_worker", chapter.id)
     return TaskStatus(job_id=job.job_id, status="queued")
 
+
+# --- NEW ENDPOINT ---
+@router.post(
+    "/{chapter_id}/analyze-transition",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=TaskStatus,
+    summary="Queue Transition Analysis",
+    dependencies=[Depends(RateLimiter(times=30, seconds=60))] # NEW: Higher rate for analysis
+)
+async def queue_transition_analysis(
+    chapter: ChapterRead = Depends(valid_chapter_id),
+):
+    """
+    Queues a background job for the Continuity Editor AI to analyze the
+    narrative flow between this chapter and the one preceding it.
+    The feedback is saved directly to the chapter in the database.
+    """
+    job = await task_queue.enqueue("transition_analysis_worker", chapter.id)
+    return TaskStatus(job_id=job.job_id, status="queued")
+
 --- FILE: C:\Projects\57-scriptorium-engine\src\project\dependencies.py ---
+# src/project/dependencies.py
 import uuid
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -775,7 +1512,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import get_db_session
 from . import service
 
-from .schemas import ProjectRead, ChapterRead
+# UPDATED: Import PartRead schema
+from .schemas import ProjectRead, ChapterRead, PartRead
 
 async def valid_project_id(
     project_id: uuid.UUID,
@@ -792,6 +1530,25 @@ async def valid_project_id(
             detail=f"Project with ID {project_id} not found."
         )
     return project
+
+# NEW: Dependency for validating a part_id
+async def valid_part_id(
+    part_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session)
+) -> PartRead:
+    """
+    Dependency that validates a part exists and returns it.
+    Raises a 404 HTTPException if the part is not found.
+    """
+    # We use the get_part_by_id service function we created earlier
+    part = await service.get_part_by_id(session=session, part_id=part_id)
+    if not part:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Part with ID {part_id} not found."
+        )
+    return part
+
 
 async def valid_chapter_id(
     chapter_id: uuid.UUID,
@@ -824,10 +1581,11 @@ from src.core.database import Base
 class Project(Base):
     __tablename__ = "projects"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    blueprint = Column(JSON, nullable=False)
+    raw_blueprint = Column(TEXT, nullable=False)
+    structured_outline = Column(JSON, nullable=True)
+    status = Column(String, default="RAW_IDEA", nullable=False)
     summary_outline = Column(TEXT, nullable=True)
     total_cost = Column(Numeric(10, 8), nullable=False, default=0.0)
-    # Relationship now points to Part
     parts = relationship("Part", back_populates="project", cascade="all, delete-orphan")
 
 class Part(Base):
@@ -837,33 +1595,82 @@ class Part(Base):
     part_number = Column(Integer, nullable=False)
     title = Column(String, nullable=False)
     summary = Column(TEXT, nullable=True)
-    # Relationship from Part to Project and Chapter
+
+    # NEW: To track the status of chapter generation for this part.
+    status = Column(String, default="DEFINED", nullable=False)
+
     project = relationship("Project", back_populates="parts")
-    chapters = relationship("Chapter", back_populates="part", cascade="all, delete-orphan")
+    chapters = relationship("Chapter", back_populates="part", cascade="all, delete-orphan", order_by="Chapter.chapter_number")
 
 class Chapter(Base):
     __tablename__ = "chapters"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # A chapter now belongs to a Part, not a Project directly
     part_id = Column(UUID(as_uuid=True), ForeignKey("parts.id"), nullable=False)
     chapter_number = Column(Integer, nullable=False)
     title = Column(String, nullable=False)
-    summary = Column(TEXT, nullable=True)
+    brief = Column(JSON, nullable=True)
     content = Column(TEXT, nullable=True)
-    status = Column(String, default="Pending")
-    # Add a field for the agent suggestion from the blueprint
+    status = Column(String, default="BRIEF_PENDING_VALIDATION")
     suggested_agent = Column(String, nullable=True)
-    # Relationship from Chapter back to Part
+    transition_feedback = Column(TEXT, nullable=True)
     part = relationship("Part", back_populates="chapters")
 
---- FILE: C:\Projects\57-scriptorium-engine\src\project\router.py ---
+--- FILE: C:\Projects\57-scriptorium-engine\src\project\part_router.py ---
+# src/project/part_router.py
 import uuid
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db_session
 from . import service
-from .schemas import ProjectCreate, ProjectRead, ProjectDetailRead, PartReadWithChapters
+
+# Import the necessary schemas and dependencies
+from .schemas import PartReadWithChapters
+from src.crew.schemas import ChapterListOutline
+from .dependencies import valid_part_id
+
+router = APIRouter(
+    prefix="/parts",
+    tags=["Parts"]
+)
+
+# NEW: Endpoint for Phase 2 Validation
+@router.put(
+    "/{part_id}/finalize-chapters",
+    response_model=PartReadWithChapters,
+    summary="Finalize the Chapter structure for a Part"
+)
+async def finalize_part_chapters(
+    part_id: uuid.UUID,
+    validated_chapters: ChapterListOutline, # The user submits the approved structure
+    session: AsyncSession = Depends(get_db_session)
+):
+    """
+    Takes a validated list of Chapters for a specific Part and creates the
+    official Chapter records in the database.
+    """
+    updated_part = await service.finalize_chapter_structure(
+        session=session,
+        part_id=part_id,
+        validated_chapters=validated_chapters
+    )
+    if not updated_part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    return updated_part
+
+--- FILE: C:\Projects\57-scriptorium-engine\src\project\router.py ---
+# src/project/router.py
+import uuid
+from fastapi import APIRouter, Depends, status, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.core.database import get_db_session
+from . import service
+
+# UPDATED: Import the schemas needed for the new endpoint
+from .schemas import ProjectCreate, ProjectRead, ProjectDetailRead
+from src.crew.schemas import PartListOutline # This schema is for the request body
+
 from .dependencies import valid_project_id
 
 router = APIRouter(
@@ -881,7 +1688,7 @@ async def create_new_project(
     project_data: ProjectCreate,
     session: AsyncSession = Depends(get_db_session)
 ):
-    """Creates a new project record from a user's 'blueprint'."""
+    """Creates a new project record from a user's 'raw_blueprint'."""
     new_project = await service.create_project(session=session, project_data=project_data)
     return new_project
 
@@ -903,64 +1710,75 @@ async def get_project_details(
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
-# This endpoint is now OBSOLETE and should be removed.
-# @router.post("/{project_id}/chapters-from-blueprint", ...)
-# async def create_parts_and_chapters_from_blueprint(...)
+# NEW: Endpoint for Phase 1 Validation
+@router.put(
+    "/{project_id}/finalize-parts",
+    response_model=ProjectDetailRead,
+    summary="Finalize the Part structure of a book"
+)
+async def finalize_project_parts(
+    project_id: uuid.UUID,
+    validated_parts: PartListOutline, # The user submits the approved structure
+    session: AsyncSession = Depends(get_db_session)
+):
+    """
+    Takes a validated list of Parts from the user and creates the official
+    Part records in the database, finalizing the book's high-level structure.
+    """
+    updated_project = await service.finalize_part_structure(
+        session=session,
+        project_id=project_id,
+        validated_parts=validated_parts
+    )
+    if not updated_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return updated_project
+
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\project\schemas.py ---
+# src/project/schemas.py
 import uuid
 from decimal import Decimal
 from pydantic import BaseModel, Field
-from typing import List, Dict
-
-# --- Blueprint Sub-Models ---
-# These models define the structure of the expert-level input.
-
-class GuidingPrinciples(BaseModel):
-    central_analogy: str
-    core_thesis: str
-    contrarian_take: str
-    tone: str
-
-class ChapterBlueprint(BaseModel):
-    chapter_number: int
-    title: str
-    central_question: str
-    key_points: List[str]
-    suggested_agent: str | None = None # This is optional in the input
-
-class PartBlueprint(BaseModel):
-    part_number: int
-    part_title: str
-    part_summary: str
-    chapters: List[ChapterBlueprint]
-
-# The main Blueprint model
-class ProjectBlueprint(BaseModel):
-    working_titles: List[str]
-    tagline: str
-    guiding_principles: GuidingPrinciples
-    target_audience: List[str]
-    book_structure: List[PartBlueprint]
+from typing import List, Dict, Any
+from src.crew.schemas import ChapterBrief
+from pydantic import field_validator
 
 # --- Main Application Schemas ---
 
 class ProjectCreate(BaseModel):
-    """The schema for creating a project, now strongly-typed."""
-    blueprint: ProjectBlueprint # Use our new, detailed model
+    """The schema for creating a project from a raw text blueprint."""
+    # UPDATED: Renamed to match the new database model.
+    raw_blueprint: str
 
 # --- Read Schemas (for API responses) ---
 
 class ProjectRead(BaseModel):
+    """Base read schema for a project."""
     id: uuid.UUID
-    blueprint: ProjectBlueprint # The response will also be strongly-typed
-    summary_outline: str | None = None
+    
+    # UPDATED: Renamed to match the model.
+    raw_blueprint: str
+    
+    # NEW: To show the project's current phase.
+    status: str
+    
+    # NEW: To show the evolving structured data.
+    structured_outline: Dict[str, Any] | None = None
+    
     total_cost: Decimal
+
+    @field_validator('structured_outline')
+    def validate_outline(cls, value):
+        if value is not None and not isinstance(value, dict):
+            raise ValueError("structured_outline must be a dictionary")
+        return value
 
     class Config:
         from_attributes = True
 
 class PartRead(BaseModel):
+    """Read schema for a single Part."""
     id: uuid.UUID
     part_number: int
     title: str
@@ -970,10 +1788,11 @@ class PartRead(BaseModel):
         from_attributes = True
 
 class ChapterRead(BaseModel):
+    """Read schema for a single Chapter, using the 'brief' field."""
     id: uuid.UUID
     chapter_number: int
     title: str
-    summary: str | None = None
+    brief: ChapterBrief | None = None
     status: str
     suggested_agent: str | None = None
     part: PartRead
@@ -982,23 +1801,26 @@ class ChapterRead(BaseModel):
         from_attributes = True
 
 class PartReadWithChapters(PartRead):
+    """Read schema for a Part that includes its nested Chapters."""
     chapters: list[ChapterRead] = []
 
 class ProjectDetailRead(ProjectRead):
+    """Read schema for a full Project, including all its Parts and Chapters."""
     parts: list[PartReadWithChapters] = []
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\project\service.py ---
 # src/project/service.py
 import uuid
-import re # Import the regular expression module
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload, subqueryload
-import re
-from .models import Project, Part, Chapter # Ensure Chapter is imported if needed later
+from sqlalchemy import delete
+from sqlalchemy.orm import selectinload, subqueryload # Ensure this is present
+from sqlalchemy import delete, select # Ensure delete and select are present
+from .models import Project, Part, Chapter
 from .schemas import ProjectCreate
-
+from src.crew.schemas import PartListOutline, ChapterListOutline
 async def create_project(session: AsyncSession, project_data: ProjectCreate) -> Project:
+    """Creates a new project record from a user's raw text blueprint."""
     new_project = Project(**project_data.model_dump())
     session.add(new_project)
     await session.commit()
@@ -1006,120 +1828,129 @@ async def create_project(session: AsyncSession, project_data: ProjectCreate) -> 
     return new_project
 
 async def get_project_by_id(session: AsyncSession, project_id: uuid.UUID) -> Project | None:
+    """Retrieves a single project by its ID."""
     result = await session.execute(select(Project).where(Project.id == project_id))
     return result.scalars().first()
 
-async def update_project_summary_outline(session: AsyncSession, project_id: uuid.UUID, outline: str) -> Project | None:
-    project = await get_project_by_id(session, project_id)
-    if project:
-        project.summary_outline = outline
-        await session.commit()
-        await session.refresh(project)
-    return project
-
-async def parse_blueprint_and_create_parts_and_chapters(
-    session: AsyncSession, project_id: uuid.UUID, blueprint: dict
-) -> list[Part]:
-    """
-    Parses a rich blueprint object, creates Part and Chapter records,
-    and returns the Parts with their Chapters eagerly loaded to prevent
-    serialization errors.
-    """
-    # This initial check is good. Let's make one small change to it.
-    existing_check = await session.execute(
-        select(Part).where(Part.project_id == project_id)
-        .options(selectinload(Part.chapters)) # Eager load here too for the "already exists" case
-        .order_by(Part.part_number)
+async def get_project_with_details(session: AsyncSession, project_id: uuid.UUID) -> Project | None:
+    """Retrieves a project and eagerly loads its parts and their chapters."""
+    result = await session.execute(
+        select(Project).options(
+            subqueryload(Project.parts).subqueryload(Part.chapters)
+        ).where(Project.id == project_id)
     )
-    existing_parts = list(existing_check.scalars().all())
-    if existing_parts:
-        print(f"Parts for project {project_id} already exist. Returning existing data.")
-        return existing_parts
+    return result.scalars().first()
 
-    # This part of your code is perfect for creating the data.
-    book_structure = blueprint.get('book_structure', [])
-    if not book_structure:
-        return []
-
-    created_part_ids = []
-    for part_data in book_structure:
-        new_part = Part(
-            project_id=project_id,
-            part_number=part_data.get('part_number'),
-            title=part_data.get('part_title'),
-            summary=part_data.get('part_summary')
-        )
-        session.add(new_part)
-        await session.flush()
-        created_part_ids.append(new_part.id) # Keep track of the IDs we created
-
-        for chapter_data in part_data.get('chapters', []):
-            central_question = chapter_data.get('central_question', 'Not specified.')
-            key_points = chapter_data.get('key_points', [])
-            key_points_str = "\n".join([f"- {point}" for point in key_points])
-            full_summary = (
-                f"**Central Question:** {central_question}\n\n"
-                f"**Key Points to Address:**\n{key_points_str}"
-            )
-            new_chapter = Chapter(
-                part_id=new_part.id,
-                chapter_number=chapter_data.get('chapter_number'),
-                title=chapter_data.get('title'),
-                summary=full_summary,
-                suggested_agent=chapter_data.get('suggested_agent')
-            )
-            session.add(new_chapter)
-    
-    # Commit all the new objects to the database.
-    await session.commit()
-
-    # --- THIS IS THE CRITICAL FIX ---
-    # The 'new_parts' list we built in the loop is now "expired" after the commit.
-    # We must re-query the database for the parts we just created, but this time,
-    # we explicitly tell SQLAlchemy to load the 'chapters' for each part.
-    
-    final_query = (
-        select(Part)
-        .options(selectinload(Part.chapters)) # This is the eager-loading instruction
-        .where(Part.id.in_(created_part_ids))
-        .order_by(Part.part_number)
+async def get_part_by_id(session: AsyncSession, part_id: uuid.UUID) -> Part | None:
+    """Retrieves a single part by its ID, including its parent project."""
+    result = await session.execute(
+        select(Part).options(selectinload(Part.project)).where(Part.id == part_id)
     )
-    
-    result = await session.execute(final_query)
-    
-    # This list of 'Part' objects now has its '.chapters' attribute pre-populated.
-    # It is safe to be returned and serialized by FastAPI.
-    return list(result.scalars().all())
+    return result.scalars().first()
 
 async def get_chapter_by_id(session: AsyncSession, chapter_id: uuid.UUID) -> Chapter | None:
-    """Retrieves a single chapter by its ID, and pre-loads the project relationship."""
+    """Retrieves a single chapter by its ID, and pre-loads its parent part and project."""
     result = await session.execute(
         select(Chapter).options(
-            # This tells SQLAlchemy to fetch the related Part,
-            # and from that Part, fetch its related Project in one go.
             selectinload(Chapter.part).selectinload(Part.project)
         ).where(Chapter.id == chapter_id)
     )
     return result.scalars().first()
+
+async def finalize_part_structure(
+    session: AsyncSession, project_id: uuid.UUID, validated_parts: PartListOutline
+) -> Project:
+    """
+    Deletes existing parts for a project and creates new ones based on the
+    user-validated structure. Updates the project status.
+    """
+    project = await get_project_with_details(session, project_id)
+    if not project:
+        return None
+
+    project.parts.clear()
+    await session.flush()
+
+    for part_data in validated_parts.parts:
+        new_part = Part(
+            project_id=project.id,
+            part_number=part_data.part_number,
+            title=part_data.title,
+            summary=part_data.summary
+        )
+        project.parts.append(new_part)
+
+    project.status = "PARTS_VALIDATED"
+    session.add(project)
+    await session.commit()
+    await session.refresh(project)
+
+    return project
+
+async def finalize_chapter_structure(
+    session: AsyncSession, part_id: uuid.UUID, validated_chapters: ChapterListOutline
+) -> Part:
+    """
+    Deletes existing chapters for a part and creates new ones based on the
+    user-validated structure. Updates the part's status.
+    """
+    part = await get_part_by_id(session, part_id)
+    if not part:
+        return None
+
+    # Delete existing chapters directly via a query
+    await session.execute(
+        delete(Chapter).where(Chapter.part_id == part.id)
+    )
+    # No need for flush here. The commit below will handle the delete before the add.
+    # If you were doing more complex operations between delete and add, flush would be good.
+
+
+    for chapter_data in validated_chapters.chapters:
+        new_chapter = Chapter(
+            part_id=part.id,
+            chapter_number=chapter_data.chapter_number,
+            title=chapter_data.title,
+            brief=chapter_data.brief.model_dump(),
+            suggested_agent=chapter_data.suggested_agent,
+            status="BRIEF_COMPLETE"
+        )
+        session.add(new_chapter)
+
+    part.status = "CHAPTERS_VALIDATED"
+    # session.add(part) # No need to add part if it's already a managed object
+
+    await session.commit()
+
+    # NEW: Re-fetch the part, eagerly loading its chapters for the response model
+    # This ensures the chapters are loaded within the async session context
+    # before the session is yielded/closed by the dependency.
+    refreshed_part_stmt = select(Part).options(
+        selectinload(Part.chapters)
+    ).where(Part.id == part_id)
+    
+    result = await session.execute(refreshed_part_stmt)
+    refreshed_part = result.scalars().first()
+
+    return refreshed_part # Return the eagerly loaded part
 
 async def update_chapter_content(session: AsyncSession, chapter_id: uuid.UUID, content: str) -> Chapter | None:
     """Updates the content of a specific chapter and sets its status to 'Complete'."""
     chapter = await get_chapter_by_id(session, chapter_id)
     if chapter:
         chapter.content = content
-        chapter.status = "Complete" # Update status upon successful generation
+        chapter.status = "Complete"
         await session.commit()
         await session.refresh(chapter)
     return chapter
 
-async def get_project_with_details(session: AsyncSession, project_id: uuid.UUID) -> Project | None:
-    """Retrieves a project and eagerly loads its parts and their chapters."""
-    result = await session.execute(
-        select(Project).options(
-            # Use subqueryload for the one-to-many relationships for efficiency
-            subqueryload(Project.parts).subqueryload(Part.chapters)
-        ).where(Project.id == project_id)
-    )
-    return result.scalars().first()
+async def update_project_summary_outline(session: AsyncSession, project_id: uuid.UUID, outline: str) -> Project | None:
+    """(Legacy) Updates the summary_outline field of a project."""
+    project = await get_project_by_id(session, project_id)
+    if project:
+        project.summary_outline = outline
+        await session.commit()
+        await session.refresh(project)
+    return project
 
 --- FILE: C:\Projects\57-scriptorium-engine\src\project\__init__.py ---

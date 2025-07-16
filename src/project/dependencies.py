@@ -1,3 +1,4 @@
+# src/project/dependencies.py
 import uuid
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import get_db_session
 from . import service
 
-from .schemas import ProjectRead, ChapterRead
+# UPDATED: Import PartRead schema
+from .schemas import ProjectRead, ChapterRead, PartRead
 
 async def valid_project_id(
     project_id: uuid.UUID,
@@ -22,6 +24,25 @@ async def valid_project_id(
             detail=f"Project with ID {project_id} not found."
         )
     return project
+
+# NEW: Dependency for validating a part_id
+async def valid_part_id(
+    part_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session)
+) -> PartRead:
+    """
+    Dependency that validates a part exists and returns it.
+    Raises a 404 HTTPException if the part is not found.
+    """
+    # We use the get_part_by_id service function we created earlier
+    part = await service.get_part_by_id(session=session, part_id=part_id)
+    if not part:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Part with ID {part_id} not found."
+        )
+    return part
+
 
 async def valid_chapter_id(
     chapter_id: uuid.UUID,

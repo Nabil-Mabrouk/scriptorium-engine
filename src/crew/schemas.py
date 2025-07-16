@@ -1,5 +1,10 @@
 from pydantic import BaseModel, Field
 from typing import List
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Union
+import json
+from pydantic import BaseModel, Field, validator, ValidationError
+from typing import List, Union
 
 class TaskStatus(BaseModel):
     """A simple schema for returning the status of a queued job."""
@@ -24,14 +29,45 @@ class ChapterOutline(BaseModel):
 # --- NEW: Schemas for the "Divide and Conquer" Workflow ---
 
 class PartOnlyOutline(BaseModel):
-    """Defines a part of the book, but WITHOUT chapters. Used for the first step."""
-    part_number: int
-    title: str
-    summary: str
+    part_number: int = Field(..., description="Numerical order of the part")
+    title: str = Field(..., description="Title of the part")
+    summary: str = Field(..., description="Brief summary of the part's content")
+
+    @validator('part_number')
+    def part_number_positive(cls, v):
+        if v < 1:
+            raise ValueError('Part number must be positive integer')
+        return v
 
 class PartListOutline(BaseModel):
-    """A Pydantic model for a list of parts, without chapter details."""
-    parts: List[PartOnlyOutline]
+    parts: List[PartOnlyOutline] = Field(..., description="List of book parts")
+    
+    @validator('parts', pre=True)
+    def ensure_list(cls, v):
+        """Handle different output formats for Pydantic V1"""
+        if isinstance(v, dict):
+            # Convert dict to list of parts
+            if 'parts' in v:
+                return v['parts']
+            # Handle parts as dictionary values
+            return list(v.values())
+        elif isinstance(v, str):
+            # Try to parse JSON string
+            try:
+                data = json.loads(v)
+                if 'parts' in data:
+                    return data['parts']
+                return data
+            except json.JSONDecodeError:
+                pass
+        return v
+    
+    @validator('parts')
+    def check_min_parts(cls, v):
+        """Ensure at least 3 parts are generated"""
+        if len(v) < 3:
+            raise ValueError('At least 3 parts are required')
+        return v
 
 class ChapterListOutline(BaseModel):
     """A Pydantic model for a list of chapters for a single part."""
@@ -50,3 +86,7 @@ class PartOutline(BaseModel):
 class BookOutline(BaseModel):
     """The complete, final, and structured outline for the entire book."""
     parts: List[PartOutline]
+
+# NEW: Schema for the finalization request body
+class FinalizationRequest(BaseModel):
+    task_type: str = Field(..., description="The type of finalization task to run, e.g., 'introduction' or 'conclusion'.")

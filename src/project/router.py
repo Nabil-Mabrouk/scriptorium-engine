@@ -1,10 +1,15 @@
+# src/project/router.py
 import uuid
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db_session
 from . import service
-from .schemas import ProjectCreate, ProjectRead, ProjectDetailRead, PartReadWithChapters
+
+# UPDATED: Import the schemas needed for the new endpoint
+from .schemas import ProjectCreate, ProjectRead, ProjectDetailRead
+from src.crew.schemas import PartListOutline # This schema is for the request body
+
 from .dependencies import valid_project_id
 
 router = APIRouter(
@@ -22,7 +27,7 @@ async def create_new_project(
     project_data: ProjectCreate,
     session: AsyncSession = Depends(get_db_session)
 ):
-    """Creates a new project record from a user's 'blueprint'."""
+    """Creates a new project record from a user's 'raw_blueprint'."""
     new_project = await service.create_project(session=session, project_data=project_data)
     return new_project
 
@@ -44,3 +49,26 @@ async def get_project_details(
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
+# NEW: Endpoint for Phase 1 Validation
+@router.put(
+    "/{project_id}/finalize-parts",
+    response_model=ProjectDetailRead,
+    summary="Finalize the Part structure of a book"
+)
+async def finalize_project_parts(
+    project_id: uuid.UUID,
+    validated_parts: PartListOutline, # The user submits the approved structure
+    session: AsyncSession = Depends(get_db_session)
+):
+    """
+    Takes a validated list of Parts from the user and creates the official
+    Part records in the database, finalizing the book's high-level structure.
+    """
+    updated_project = await service.finalize_part_structure(
+        session=session,
+        project_id=project_id,
+        validated_parts=validated_parts
+    )
+    if not updated_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return updated_project
