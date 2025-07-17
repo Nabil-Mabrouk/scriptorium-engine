@@ -1,52 +1,45 @@
 <template>
   <AppLayout>
-    <h2 class="text-2xl mb-4">Projects</h2>
-
-    <form @submit.prevent="create" class="mb-6">
-      <textarea
-        v-model="raw"
-        rows="3"
-        placeholder="Paste your book idea..."
-        class="border rounded w-full p-2 mb-2"
-      />
-      <BaseButton type="submit">Create Project</BaseButton>
-    </form>
-
-    <ul class="space-y-4">
-      <li
-        v-for="p in projects"
-        :key="p.id"
-        class="p-4 border rounded flex justify-between items-center"
-      >
-        <div>
-          <strong>{{ p.raw_blueprint.slice(0, 60) }}...</strong>
-          <span class="text-sm text-gray-500 ml-2">{{ p.status }}</span>
-        </div>
-        <div class="space-x-2">
-          <RouterLink :to="`/projects/${p.id}`">
-            <BaseButton variant="secondary" size="sm">View</BaseButton>
-          </RouterLink>
-          <BaseButton size="sm" @click="generateParts(p.id)">Generate Parts</BaseButton>
-        </div>
-      </li>
-    </ul>
+    <div class="flex justify-between items-center mb-6">
+      <h1 class="text-3xl font-bold text-teal-400">Projects Dashboard</h1>
+      <button @click="isModalOpen = true" class="px-4 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 transition-colors">
+        + New Project
+      </button>
+    </div>
+    
+    <div v-if="projectStore.isLoading && projectStore.projects.length === 0" class="text-center text-slate-400">Loading projects...</div>
+    <div v-else>
+       <div v-if="projectStore.projects.length === 0" class="p-6 bg-slate-800 rounded-lg text-center">
+        <p class="font-semibold">No projects found.</p>
+        <button @click="isModalOpen = true" class="mt-4 px-4 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 transition-colors">
+          Create Your First Book
+        </button>
+      </div>
+      
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <ProjectCard 
+          v-for="project in projectStore.projects" 
+          :key="project.id" 
+          :project="project"
+        />
+      </div>
+    </div>
   </AppLayout>
+
+  <ProjectCreateModal :visible="isModalOpen" @close="isModalOpen = false" />
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
 import AppLayout from '@/components/layout/AppLayout.vue';
-import BaseButton from '@/components/base/BaseButton.vue';
-import { useProject } from '@/composables/useProject';
+import ProjectCard from '@/components/features/projects/ProjectCard.vue';
+import ProjectCreateModal from '@/components/features/projects/ProjectCreateModal.vue'; // Import the modal
+import { useProjectStore } from '@/stores/project';
 
-const { projects, load, add, generateParts } = useProject();
-const raw = ref('');
+const projectStore = useProjectStore();
+const isModalOpen = ref(false); // Add state to control the modal
 
-const create = async () => {
-  if (!raw.value.trim()) return;
-  await add(raw.value);
-  raw.value = '';
-};
-
-onMounted(load);
+onMounted(() => {
+  projectStore.fetchProjects();
+});
 </script>

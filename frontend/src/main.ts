@@ -1,16 +1,14 @@
-import { createApp } from 'vue';
-import { createPinia } from 'pinia';
-import router from '@/router';
-import App from '@/App.vue';
-import BaseButton from '@/components/base/BaseButton.vue';
-import '@/assets/styles/main.css';
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import router from './router' // Import the router
 
-const pinia = createPinia();
-const app = createApp(App);
+import App from './App.vue'
+import './assets/styles/main.css'
 
-app.use(pinia);   // 1️⃣  FIRST
-app.use(router);  // 2️⃣  SECOND
+const app = createApp(App)
+const pinia = createPinia()
 
-app.component('BaseButton', BaseButton); // now <BaseButton> works everywhere
-app.mount('#app');
+app.use(pinia)
+app.use(router) // Use the router
 
+app.mount('#app')

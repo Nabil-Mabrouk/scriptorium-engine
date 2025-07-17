@@ -6,10 +6,10 @@ from src.core.task_queue import task_queue
 from src.project.dependencies import valid_project_id, valid_part_id
 from src.project.schemas import ProjectRead, PartRead
 from src.crew.schemas import TaskStatus, FinalizationRequest
-
+from arq.jobs import Job # Import the Job class from arq
 # NEW: Import RateLimiter
 from fastapi_limiter.depends import RateLimiter
-
+from .schemas import TaskStatus 
 router = APIRouter(prefix="/crew", tags=["Crew AI"])
 
 # --- Phase 1 Endpoint ---
@@ -72,7 +72,21 @@ async def queue_finalization(
     return TaskStatus(job_id=job.job_id, status="queued")
 
 # backend router
-@router.get("/crew/status/{job_id}")
-async def job_status(job_id: str):
-    job = await task_queue.pool.get_job(job_id)
-    return {"status": job.status if job else "error"}
+# The corrected status endpoint
+# Replace your existing get_job_status function with this one
+@router.get("/status/{job_id}", response_model=TaskStatus, summary="Get Job Status")
+async def get_job_status(job_id: str):
+    """
+    Checks the status of a background job using the direct status() method.
+    """
+    # 1. Create a Job instance
+    job = Job(job_id, task_queue.pool)
+    
+    # 2. Directly await the status string (e.g., 'in_progress', 'complete')
+    status_string = await job.status()
+    
+    # The job.status() method itself handles cases where the job is not found
+    # by returning the string 'not_found'.
+    
+    # 3. Return the status in the TaskStatus model
+    return TaskStatus(job_id=job_id, status=status_string)

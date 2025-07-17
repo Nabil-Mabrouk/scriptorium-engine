@@ -1,15 +1,24 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import Dashboard from '@/pages/Dashboard.vue';
-import ProjectDetail from '@/pages/ProjectDetail.vue';
+import ProjectDetailPage from '@/pages/ProjectDetailPage.vue';
 
 const routes = [
-  { path: '/', component: Dashboard },
-  { path: '/projects/:id', component: ProjectDetail, props: true },
-//   { path: '/parts/:id', component: PartDetail, props: true },
-// { path: '/chapters/:id', component: ChapterDetail, props: true },
+  {
+    path: '/',
+    name: 'Dashboard',
+    component: Dashboard,
+  },
+  {
+    path: '/projects/:id', // A dynamic route for a single project
+    name: 'ProjectDetail',
+    component: ProjectDetailPage,
+    props: true, // Pass route params as component props
+  },
 ];
 
-export default createRouter({
+const router = createRouter({
   history: createWebHistory(),
   routes,
 });
+
+export default router;

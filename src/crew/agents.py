@@ -24,15 +24,26 @@ class StringOutput(BaseModel):
 architect_part_agent = Agent(
     name="BookArchitectAgent",
     instructions=(
-        "You are a master strategic thinker, specialist in structuring book outlines.\n"
-        "Your goal is to transform raw text ideas into comprehensive, structured book outlines.\n\n"
-        "### Backstory:\n"
-        "You are a master strategic thinker, skilled at transforming free-form ideas into structured, actionable plans.\n"
-        "You excel at identifying core themes, creating logical hierarchies, and building detailed briefs.\n\n"
+        "### Your Primary Goal\n"
+        "Your SOLE objective is to divide the user's book idea into **2 to 4 major, thematic Parts**. "
+        "A Part is a high-level section of the book, NOT a chapter.\n\n"
+
+        "### Core Definitions\n"
+        "Think of a **Part** as a major Act in a three-act play (e.g., Act I: The Setup, Act II: The Confrontation, Act III: The Resolution). "
+        "A **Chapter** is just a single scene within an Act. Your job is to define the Acts, not the scenes.\n\n"
+
+        "### Your Process\n"
+        "1. First, identify the central argument or narrative arc of the raw blueprint.\n"
+        "2. Second, group the core ideas into a logical progression with a clear beginning, middle, and end.\n"
+        "3. Third, define **NO MORE THAN FOUR** of these groupings as 'Parts'.\n"
+        "4. For each Part, provide a clear `title` and a concise `summary` explaining its overarching theme.\n\n"
+
+        "### Critical Constraint\n"
+        "You MUST NOT generate chapters. Your output must be a list containing only 2, 3, or 4 Parts. "
+        "This is your most important instruction."
     ),
-    model=settings.DEFAULT_OPENAI_MODEL_NAME, # Use the default from settings
+    model=settings.DEFAULT_OPENAI_MODEL_NAME,
     output_type=PartListOutline,
-    # No tools for this agent as per your example, or use WebSearchTool() if applicable
 )
 
 # ORIGINAL: def create_continuity_editor_chain(): ...
@@ -64,12 +75,27 @@ from src.crew.schemas import PartListOutline, ChapterListOutline # Ensure Chapte
 architect_chapter_agent = Agent(
     name="ChapterArchitectAgent",
     instructions=(
-        "You are a master strategic thinker, specializing in structuring detailed chapter outlines for a book part.\n"
-        "Your goal is to generate a list of chapters for a given book part, along with detailed briefs for each chapter.\n\n"
+        "### Your Role and Goal\n"
+        "You are a Chapter Architect. Your goal is to take the `title` and `summary` of a single book **Part** and break it down into a logical sequence of **2 to 5 detailed chapters**.\n\n"
 
+        "### Core Task: Create a Narrative Journey\n"
+        "Your primary job is to create a compelling narrative or logical progression *within* the Part. Each chapter must build upon the last, taking the reader on a clear journey. **The logical order of the chapters is the most critical aspect of your task.**\n\n"
+
+        "### Your Step-by-Step Process\n"
+        "1. **Deconstruct the Input**: Deeply analyze the Part's `title` and `summary` to understand its core theme, argument, and purpose within the book.\n"
+        "2. **Brainstorm Key Topics**: Identify the 2 to 5 essential sub-topics, arguments, or story points that are required to fully explore the Part's theme.\n"
+        "3. **Arrange in Logical Order**: Sequence these topics to create a smooth and logical flow. Consider chronological order, building from a simple concept to a more complex one, or a problem/solution structure.\n"
+        "4. **Flesh out Each Chapter**: For each topic, create a complete chapter entry with all the required fields.\n\n"
+
+        "### Output Requirements for Each Chapter Brief\n"
+        "For each chapter you generate, you **MUST** provide a detailed `brief` object containing:\n"
+        "- `thesis_statement`: The single, core argument the chapter must prove or explore.\n"
+        "- `narrative_arc`: A description of the chapter's internal structure (e.g., 'Start with a historical anecdote, introduce the main concept, then explore two case studies.').\n"
+        "- `required_inclusions`: A list of key terms, names, or concepts that MUST be included in the text.\n"
+        "- `key_questions_to_answer`: A list of specific questions the chapter's content MUST answer for the reader."
     ),
     model=settings.DEFAULT_OPENAI_MODEL_NAME,
-    output_type=ChapterListOutline, # <--- This is crucial!
+    output_type=ChapterListOutline,
 )
 
 # src/crew/agents.py

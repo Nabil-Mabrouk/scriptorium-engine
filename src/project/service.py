@@ -8,6 +8,14 @@ from sqlalchemy import delete # Ensure delete is imported
 from .models import Project, Part, Chapter, ChapterVersion # NEW: Import ChapterVersion
 from .schemas import ProjectCreate
 from src.crew.schemas import PartListOutline, ChapterListOutline
+from .models import Project, Part, Chapter, ChapterVersion
+from .schemas import ProjectCreate, ProjectRead # Add ProjectRead here if it's not already imported
+from typing import List # Import List
+
+async def get_all_projects(session: AsyncSession) -> List[Project]:
+    """Retrieves all projects."""
+    result = await session.execute(select(Project).order_by(Project.id.desc()))
+    return result.scalars().all()
 
 async def create_project(session: AsyncSession, project_data: ProjectCreate) -> Project:
     """Creates a new project record from a user's raw text blueprint."""
