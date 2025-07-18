@@ -1,21 +1,27 @@
 # src/project/service.py
 import uuid
+import logging # NEW: Import logging module
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload, subqueryload
-from sqlalchemy import delete # Ensure delete is imported
+from sqlalchemy import delete, update # Ensure update is imported for potential future use
 
-from .models import Project, Part, Chapter, ChapterVersion # NEW: Import ChapterVersion
-from .schemas import ProjectCreate
-from src.crew.schemas import PartListOutline, ChapterListOutline
 from .models import Project, Part, Chapter, ChapterVersion
 from .schemas import ProjectCreate, ProjectRead # Add ProjectRead here if it's not already imported
+from src.crew.schemas import PartListOutline, ChapterListOutline # Ensure these are imported
 from typing import List # Import List
+
+# NEW: Get a logger instance for this module
+logger = logging.getLogger(__name__)
+
 
 async def get_all_projects(session: AsyncSession) -> List[Project]:
     """Retrieves all projects."""
+    logger.debug("Fetching all projects.")
     result = await session.execute(select(Project).order_by(Project.id.desc()))
-    return result.scalars().all()
+    projects = result.scalars().all()
+    logger.info(f"Retrieved {len(projects)} projects.")
+    return projects
 
 async def create_project(session: AsyncSession, project_data: ProjectCreate) -> Project:
     """Creates a new project record from a user's raw text blueprint."""
@@ -23,37 +29,62 @@ async def create_project(session: AsyncSession, project_data: ProjectCreate) -> 
     session.add(new_project)
     await session.commit()
     await session.refresh(new_project)
+    logger.info(f"New project created with ID: {new_project.id}")
     return new_project
 
 async def get_project_by_id(session: AsyncSession, project_id: uuid.UUID) -> Project | None:
     """Retrieves a single project by its ID."""
+    logger.debug(f"Fetching project with ID: {project_id}")
     result = await session.execute(select(Project).where(Project.id == project_id))
-    return result.scalars().first()
+    project = result.scalars().first()
+    if project:
+        logger.info(f"Project {project_id} found.")
+    else:
+        logger.warning(f"Project {project_id} not found.")
+    return project
 
 async def get_project_with_details(session: AsyncSession, project_id: uuid.UUID) -> Project | None:
     """Retrieves a project and eagerly loads its parts and their chapters."""
+    logger.debug(f"Fetching project with details for ID: {project_id}")
     result = await session.execute(
         select(Project).options(
             subqueryload(Project.parts).subqueryload(Part.chapters)
         ).where(Project.id == project_id)
     )
-    return result.scalars().first()
+    project = result.scalars().first()
+    if project:
+        logger.info(f"Project {project_id} with details found.")
+    else:
+        logger.warning(f"Project {project_id} with details not found.")
+    return project
 
 async def get_part_by_id(session: AsyncSession, part_id: uuid.UUID) -> Part | None:
     """Retrieves a single part by its ID, including its parent project."""
+    logger.debug(f"Fetching part with ID: {part_id}")
     result = await session.execute(
         select(Part).options(selectinload(Part.project)).where(Part.id == part_id)
     )
-    return result.scalars().first()
+    part = result.scalars().first()
+    if part:
+        logger.info(f"Part {part_id} found.")
+    else:
+        logger.warning(f"Part {part_id} not found.")
+    return part
 
 async def get_chapter_by_id(session: AsyncSession, chapter_id: uuid.UUID) -> Chapter | None:
     """Retrieves a single chapter by its ID, and pre-loads its parent part and project."""
+    logger.debug(f"Fetching chapter with ID: {chapter_id}")
     result = await session.execute(
         select(Chapter).options(
             selectinload(Chapter.part).selectinload(Part.project)
         ).where(Chapter.id == chapter_id)
     )
-    return result.scalars().first()
+    chapter = result.scalars().first()
+    if chapter:
+        logger.info(f"Chapter {chapter_id} found.")
+    else:
+        logger.warning(f"Chapter {chapter_id} not found.")
+    return chapter
 
 async def finalize_part_structure(
     session: AsyncSession, project_id: uuid.UUID, validated_parts: PartListOutline
@@ -64,11 +95,17 @@ async def finalize_part_structure(
     """
     project = await get_project_with_details(session, project_id)
     if not project:
+        logger.error(f"Cannot finalize parts: Project {project_id} not found.")
         return None
 
-    project.parts.clear()
-    await session.flush()
-
+    # Delete existing parts and their cascade-deleted chapters/versions
+    # Using delete(Part).where(...) is generally more efficient for mass deletes
+    # than project.parts.clear() for detached or large collections.
+    await session.execute(
+        delete(Part).where(Part.project_id == project.id)
+    )
+    logger.info(f"Existing parts for project {project_id} cleared.")
+    
     for part_data in validated_parts.parts:
         new_part = Part(
             project_id=project.id,
@@ -76,12 +113,14 @@ async def finalize_part_structure(
             title=part_data.title,
             summary=part_data.summary
         )
-        project.parts.append(new_part)
+        session.add(new_part)
+        logger.debug(f"Added new part: {new_part.title} to project {project_id}")
 
     project.status = "PARTS_VALIDATED"
-    session.add(project)
+    session.add(project) # Ensure project state is tracked for update
     await session.commit()
-    await session.refresh(project)
+    await session.refresh(project) # Refresh to load newly added parts
+    logger.info(f"Part structure finalized for project {project_id}. Status: {project.status}")
 
     return project
 
@@ -94,67 +133,79 @@ async def finalize_chapter_structure(
     """
     part = await get_part_by_id(session, part_id)
     if not part:
+        logger.error(f"Cannot finalize chapters: Part {part_id} not found.")
         return None
 
     # Delete existing chapters directly via a query
     await session.execute(
         delete(Chapter).where(Chapter.part_id == part.id)
     )
-    # No need for flush here. The commit below will handle the delete before the add.
-    # If you were doing more complex operations between delete and add, flush would be good.
-
+    logger.info(f"Existing chapters for part {part_id} cleared.")
 
     for chapter_data in validated_chapters.chapters:
         new_chapter = Chapter(
             part_id=part.id,
             chapter_number=chapter_data.chapter_number,
             title=chapter_data.title,
-            brief=chapter_data.brief.model_dump(),
+            brief=chapter_data.brief.model_dump(), # Ensure brief is dumped to JSON
             suggested_agent=chapter_data.suggested_agent,
             status="BRIEF_COMPLETE"
         )
         session.add(new_chapter)
+        logger.debug(f"Added new chapter: {new_chapter.title} to part {part_id}")
 
     part.status = "CHAPTERS_VALIDATED"
-    # session.add(part) # No need to add part if it's already a managed object
+    # session.add(part) # No need to add part if it's already a managed object, but explicit `session.add(part)` is harmless
 
     await session.commit()
+    logger.info(f"Chapter structure finalized for part {part_id}. Status: {part.status}")
 
     # NEW: Re-fetch the part, eagerly loading its chapters for the response model
-    # This ensures the chapters are loaded within the async session context
-    # before the session is yielded/closed by the dependency.
     refreshed_part_stmt = select(Part).options(
         selectinload(Part.chapters)
     ).where(Part.id == part_id)
     
     result = await session.execute(refreshed_part_stmt)
     refreshed_part = result.scalars().first()
+    
+    if refreshed_part:
+        logger.info(f"Refreshed part {part_id} with {len(refreshed_part.chapters)} new chapters for response.")
+    else:
+        logger.error(f"Failed to re-fetch part {part_id} after finalizing chapters.")
 
-    return refreshed_part # Return the eagerly loaded part
-
+    return refreshed_part
 
 
 async def update_project_summary_outline(session: AsyncSession, project_id: uuid.UUID, outline: str) -> Project | None:
     """(Legacy) Updates the summary_outline field of a project."""
+    logger.info(f"Attempting to update summary outline for project {project_id}.")
     project = await get_project_by_id(session, project_id)
     if project:
         project.summary_outline = outline
         await session.commit()
         await session.refresh(project)
+        logger.info(f"Summary outline updated for project {project_id}.")
+    else:
+        logger.warning(f"Failed to update summary outline: Project {project_id} not found.")
     return project
 
 
 async def update_chapter_status(session: AsyncSession, chapter_id: uuid.UUID, new_status: str) -> Chapter | None:
     """Updates the status of a specific chapter."""
+    logger.info(f"Updating status for chapter {chapter_id} to '{new_status}'.")
     chapter = await get_chapter_by_id(session, chapter_id)
     if chapter:
         chapter.status = new_status
         await session.commit()
         await session.refresh(chapter)
+        logger.info(f"Chapter {chapter_id} status updated to '{new_status}'.")
+    else:
+        logger.warning(f"Failed to update status: Chapter {chapter_id} not found.")
     return chapter
 
 async def update_chapter_content(session: AsyncSession, chapter_id: uuid.UUID, content: str, token_count: int | None = None) -> Chapter | None:
     """Updates the content of a specific chapter and also creates a new ChapterVersion record."""
+    logger.info(f"Updating content for chapter {chapter_id}. Token count: {token_count}")
     chapter = await get_chapter_by_id(session, chapter_id)
     if chapter:
         # Create a new version record
@@ -164,9 +215,12 @@ async def update_chapter_content(session: AsyncSession, chapter_id: uuid.UUID, c
             token_count=token_count
         )
         session.add(new_version)
+        logger.debug(f"Created new version for chapter {chapter_id}.")
         
         chapter.content = content # Update the current content
-        # REMOVED: chapter.status = "CONTENT_GENERATED" - Status is set by caller now
         await session.commit()
         await session.refresh(chapter)
+        logger.info(f"Content and new version saved for chapter {chapter_id}.")
+    else:
+        logger.warning(f"Failed to update content: Chapter {chapter_id} not found.")
     return chapter

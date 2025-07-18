@@ -1,0 +1,1898 @@
+--- Filesystem Structure ---
+src/
+    assets/
+    components/
+    composables/
+    lib/
+    pages/
+    router/
+    stores/
+    views/
+    App.vue
+    main.ts
+        images/
+        styles/
+            base.css
+            main.css
+        __tests__/
+        base/
+        features/
+        icons/
+        layout/
+            HelloWorld.spec.ts
+            BaseButton.vue
+            BaseInput.vue
+            BaseModal.vue
+            crew/
+            projects/
+                ChapterEditor.vue
+                PartEditor.vue
+                ProjectCard.vue
+                ProjectCreateModal.vue
+            IconCommunity.vue
+            IconDocumentation.vue
+            IconEcosystem.vue
+            IconSupport.vue
+            IconTooling.vue
+            AppLayout.vue
+        useApi.ts
+        api.ts
+        type.ts
+        types.ts
+        Dashboard.vue
+        ProjectDetailPage.vue
+        index.ts
+        project.ts
+        task.ts
+        AboutView.vue
+        HomeView.vue
+
+--- Python File Contents (.py files) ---
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\App.vue ---
+<template>
+  <router-view />
+</template>
+
+<script setup lang="ts">
+import { RouterView } from 'vue-router';
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\main.ts ---
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import router from './router' // Import the router
+
+import App from './App.vue'
+import './assets/styles/main.css'
+
+const app = createApp(App)
+const pinia = createPinia()
+
+app.use(pinia)
+app.use(router) // Use the router
+
+app.mount('#app')
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\base\BaseButton.vue ---
+<template>
+  <button
+    :class="[
+      'px-4 py-2 rounded font-semibold transition',
+      variantClasses[variant],
+      sizeClasses[size],
+    ]"
+  >
+    <slot />
+  </button>
+</template>
+
+<script setup lang="ts">
+defineProps<{
+  variant?: 'primary' | 'secondary' | 'danger';
+  size?: 'sm' | 'md' | 'lg';
+}>();
+
+const variantClasses = {
+  primary: 'bg-blue-600 text-white hover:bg-blue-700',
+  secondary: 'bg-gray-200 text-gray-800 hover:bg-gray-300',
+  danger: 'bg-red-600 text-white hover:bg-red-700',
+};
+
+const sizeClasses = {
+  sm: 'text-sm',
+  md: 'text-base',
+  lg: 'text-lg',
+};
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\base\BaseInput.vue ---
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\base\BaseModal.vue ---
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\features\projects\ChapterEditor.vue ---
+<template>
+  <div class="p-4 bg-black/20 rounded-lg mt-4">
+    <h3 class="text-lg font-semibold text-slate-300 mb-3">Draft Chapter Outline</h3>
+    <div v-for="(chapter, index) in editableChapters" :key="index" class="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700">
+      <div class="flex justify-between items-center mb-4">
+        <label class="font-semibold text-slate-300">Chapter {{ chapter.chapter_number }}</label>
+        <button @click="removeChapter(index)" class="text-red-400 hover:text-red-300 text-sm">Remove</button>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <input type="text" v-model="chapter.title" placeholder="Chapter Title" class="w-full p-2 bg-slate-800 border border-slate-600 rounded-md">
+        <input type="text" v-model="chapter.suggested_agent" placeholder="Suggested Agent" class="w-full p-2 bg-slate-800 border border-slate-600 rounded-md">
+      </div>
+      <div class="mt-4">
+        <label class="block text-sm font-medium text-slate-400 mb-1">Brief: Thesis Statement</label>
+        <textarea v-model="chapter.brief.thesis_statement" rows="2" class="w-full p-2 bg-slate-800 border border-slate-600 rounded-md"></textarea>
+      </div>
+       <div class="mt-2">
+        <label class="block text-sm font-medium text-slate-400 mb-1">Brief: Narrative Arc</label>
+        <textarea v-model="chapter.brief.narrative_arc" rows="2" class="w-full p-2 bg-slate-800 border border-slate-600 rounded-md"></textarea>
+      </div>
+    </div>
+    
+    <div class="flex justify-between mt-6">
+      <button @click="addChapter" class="px-4 py-2 rounded-md font-semibold border border-slate-600 hover:bg-slate-700 transition-colors">+ Add Chapter</button>
+      <button @click="submitFinalization" class="px-6 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 transition-colors">Finalize Chapter Structure</button>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, watch } from 'vue';
+import { useProjectStore } from '@/stores/project';
+
+// Re-define interfaces for strong typing within the component
+interface ChapterBrief { thesis_statement: string; narrative_arc: string; required_inclusions: string[]; key_questions_to_answer: string[]; }
+interface Chapter { chapter_number: number; title: string; brief: ChapterBrief; suggested_agent: string; }
+
+const props = defineProps<{
+  projectId: string;
+  partId: string;
+  draftChapters: { chapters: Chapter[] };
+}>();
+
+const projectStore = useProjectStore();
+const editableChapters = ref<Chapter[]>([]);
+
+watch(() => props.draftChapters, (newDraft) => {
+  editableChapters.value = JSON.parse(JSON.stringify(newDraft.chapters || []));
+}, { immediate: true, deep: true });
+
+const addChapter = () => {
+  const nextChapterNumber = editableChapters.value.length > 0 ? Math.max(...editableChapters.value.map(c => c.chapter_number)) + 1 : 1;
+  editableChapters.value.push({
+    chapter_number: nextChapterNumber, title: '', suggested_agent: '',
+    brief: { thesis_statement: '', narrative_arc: '', required_inclusions: [], key_questions_to_answer: [] },
+  });
+};
+
+const removeChapter = (index: number) => {
+  editableChapters.value.splice(index, 1);
+};
+
+const submitFinalization = async () => {
+  const finalChapters = { chapters: editableChapters.value.map((chap, index) => ({ ...chap, chapter_number: index + 1 })) };
+  if (confirm('Are you sure you want to finalize the chapters for this part?')) {
+    await projectStore.finalizeChapters(props.partId, finalChapters);
+  }
+};
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\features\projects\PartEditor.vue ---
+<template>
+  <div>
+    <div v-for="(part, index) in editableParts" :key="index" class="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700">
+      <div class="flex justify-between items-center mb-3">
+        <label class="font-semibold text-slate-300">Part {{ part.part_number }}</label>
+        <button @click="removePart(index)" class="text-red-400 hover:text-red-300 text-sm">Remove</button>
+      </div>
+      <div class="space-y-3">
+        <input type="text" v-model="part.title" placeholder="Part Title" class="w-full p-2 bg-slate-800 border border-slate-600 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none">
+        <textarea v-model="part.summary" placeholder="Part Summary" rows="3" class="w-full p-2 bg-slate-800 border border-slate-600 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none"></textarea>
+      </div>
+    </div>
+    
+    <div class="flex justify-between mt-6">
+      <button @click="addPart" class="px-4 py-2 rounded-md font-semibold border border-slate-600 hover:bg-slate-700 transition-colors">
+        + Add Part
+      </button>
+      <button @click="submitFinalization" class="px-6 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 transition-colors">
+        Finalize Part Structure
+      </button>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, watch } from 'vue';
+import { useProjectStore } from '@/stores/project';
+
+// Define the shape of a Part again for strong typing
+interface Part {
+  part_number: number;
+  title: string;
+  summary: string;
+}
+
+const props = defineProps<{
+  projectId: string;
+  draftParts: { parts: Part[] };
+}>();
+
+const projectStore = useProjectStore();
+const editableParts = ref<Part[]>([]);
+
+// When the component receives the draft parts, create a deep copy for editing
+watch(() => props.draftParts, (newDraft) => {
+  editableParts.value = JSON.parse(JSON.stringify(newDraft.parts || []));
+}, { immediate: true, deep: true });
+
+const addPart = () => {
+  const nextPartNumber = editableParts.value.length > 0
+    ? Math.max(...editableParts.value.map(p => p.part_number)) + 1
+    : 1;
+  editableParts.value.push({
+    part_number: nextPartNumber,
+    title: '',
+    summary: '',
+  });
+};
+
+const removePart = (index: number) => {
+  editableParts.value.splice(index, 1);
+};
+
+const submitFinalization = async () => {
+  // Re-number parts sequentially before submitting to maintain order
+  const finalParts = {
+    parts: editableParts.value.map((part, index) => ({
+      ...part,
+      part_number: index + 1,
+    })),
+  };
+
+  if (confirm('Are you sure you want to finalize this structure? This will replace any existing parts.')) {
+    await projectStore.finalizeParts(props.projectId, finalParts);
+  }
+};
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\features\projects\ProjectCard.vue ---
+<template>
+  <router-link v-if="project" :to="`/projects/${project.id}`">
+    <div class="bg-slate-800 rounded-lg border border-slate-700 p-5 transition-all hover:border-teal-500/80 cursor-pointer h-full">
+      <div class="flex flex-col h-full">
+        <p class="text-slate-300 text-sm leading-relaxed flex-grow">
+          {{ truncatedBlueprint }}
+        </p>
+        
+        <div class="mt-4 pt-4 border-t border-slate-700 flex justify-between items-center">
+          <span class="inline-block px-3 py-1 text-xs font-semibold rounded-full bg-teal-500/10 text-teal-400">
+            {{ project.status }}
+          </span>
+          <span class="text-sm font-mono text-slate-400">
+            ${{ parseFloat(project.total_cost).toFixed(4) }}
+          </span>
+        </div>
+      </div>
+    </div>
+  </router-link>
+</template>
+
+<script setup lang="ts">
+import { defineProps, computed } from 'vue';
+import type { PropType } from 'vue';
+import { RouterLink } from 'vue-router';
+
+// This should be the same, corrected interface from your store
+interface Project {
+  id: string;
+  raw_blueprint: string;
+  status: string;
+  total_cost: string; // Correctly typed as string
+  structured_outline?: { [key: string]: any } | null;
+}
+
+const props = defineProps({
+  project: {
+    type: Object as PropType<Project>,
+    required: true,
+  },
+});
+
+// A defensive computed property to prevent errors
+const truncatedBlueprint = computed(() => {
+  const blueprint = props.project?.raw_blueprint || '';
+  if (blueprint.length > 150) {
+    return `${blueprint.substring(0, 150)}...`;
+  }
+  return blueprint;
+});
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\features\projects\ProjectCreateModal.vue ---
+<template>
+  <div v-if="visible" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <div class="bg-slate-800 rounded-lg shadow-xl w-full max-w-2xl p-6 border border-slate-700">
+      <h2 class="text-2xl font-bold text-teal-400 mb-4">Create New Book Project</h2>
+      <p class="text-slate-400 mb-6">
+        Describe your book idea below. This "raw blueprint" will be used by the AI agents to structure your book.
+      </p>
+      
+      <form @submit.prevent="handleSubmit">
+        <textarea
+          v-model="blueprint"
+          rows="10"
+          class="w-full p-3 bg-slate-900 border border-slate-600 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none"
+          placeholder="e.g., A science fiction novel about the first contact with an alien civilization that communicates through music..."
+        ></textarea>
+
+        <div class="mt-6 flex justify-end gap-4">
+          <button 
+            type="button" 
+            @click="closeModal"
+            class="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 transition-colors"
+          >
+            Cancel
+          </button>
+          <button 
+            type="submit"
+            :disabled="isLoading || !blueprint.trim()"
+            class="px-4 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 disabled:bg-slate-500 disabled:cursor-not-allowed transition-colors"
+          >
+            {{ isLoading ? 'Creating...' : 'Create Project' }}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue';
+import { useProjectStore } from '@/stores/project';
+
+// Props to control visibility from the parent
+defineProps({
+  visible: {
+    type: Boolean,
+    required: true,
+  },
+});
+
+// Emits to communicate back to the parent
+const emit = defineEmits(['close']);
+
+const projectStore = useProjectStore();
+const blueprint = ref('');
+const isLoading = ref(false);
+
+const closeModal = () => {
+  emit('close');
+};
+
+const handleSubmit = async () => {
+  if (!blueprint.value.trim()) return;
+
+  isLoading.value = true;
+  try {
+    await projectStore.createProject(blueprint.value);
+    blueprint.value = ''; // Clear the textarea
+    closeModal(); // Close the modal on success
+  } catch (error) {
+    // Error is already logged in the store, you could add a UI notification here
+    alert('Failed to create project. Please check the console.');
+  } finally {
+    isLoading.value = false;
+  }
+};
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\icons\IconCommunity.vue ---
+<template>
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor">
+    <path
+      d="M15 4a1 1 0 1 0 0 2V4zm0 11v-1a1 1 0 0 0-1 1h1zm0 4l-.707.707A1 1 0 0 0 16 19h-1zm-4-4l.707-.707A1 1 0 0 0 11 14v1zm-4.707-1.293a1 1 0 0 0-1.414 1.414l1.414-1.414zm-.707.707l-.707-.707.707.707zM9 11v-1a1 1 0 0 0-.707.293L9 11zm-4 0h1a1 1 0 0 0-1-1v1zm0 4H4a1 1 0 0 0 1.707.707L5 15zm10-9h2V4h-2v2zm2 0a1 1 0 0 1 1 1h2a3 3 0 0 0-3-3v2zm1 1v6h2V7h-2zm0 6a1 1 0 0 1-1 1v2a3 3 0 0 0 3-3h-2zm-1 1h-2v2h2v-2zm-3 1v4h2v-4h-2zm1.707 3.293l-4-4-1.414 1.414 4 4 1.414-1.414zM11 14H7v2h4v-2zm-4 0c-.276 0-.525-.111-.707-.293l-1.414 1.414C5.42 15.663 6.172 16 7 16v-2zm-.707 1.121l3.414-3.414-1.414-1.414-3.414 3.414 1.414 1.414zM9 12h4v-2H9v2zm4 0a3 3 0 0 0 3-3h-2a1 1 0 0 1-1 1v2zm3-3V3h-2v6h2zm0-6a3 3 0 0 0-3-3v2a1 1 0 0 1 1 1h2zm-3-3H3v2h10V0zM3 0a3 3 0 0 0-3 3h2a1 1 0 0 1 1-1V0zM0 3v6h2V3H0zm0 6a3 3 0 0 0 3 3v-2a1 1 0 0 1-1-1H0zm3 3h2v-2H3v2zm1-1v4h2v-4H4zm1.707 4.707l.586-.586-1.414-1.414-.586.586 1.414 1.414z"
+    />
+  </svg>
+</template>
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\icons\IconDocumentation.vue ---
+<template>
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="17" fill="currentColor">
+    <path
+      d="M11 2.253a1 1 0 1 0-2 0h2zm-2 13a1 1 0 1 0 2 0H9zm.447-12.167a1 1 0 1 0 1.107-1.666L9.447 3.086zM1 2.253L.447 1.42A1 1 0 0 0 0 2.253h1zm0 13H0a1 1 0 0 0 1.553.833L1 15.253zm8.447.833a1 1 0 1 0 1.107-1.666l-1.107 1.666zm0-14.666a1 1 0 1 0 1.107 1.666L9.447 1.42zM19 2.253h1a1 1 0 0 0-.447-.833L19 2.253zm0 13l-.553.833A1 1 0 0 0 20 15.253h-1zm-9.553-.833a1 1 0 1 0 1.107 1.666L9.447 14.42zM9 2.253v13h2v-13H9zm1.553-.833C9.203.523 7.42 0 5.5 0v2c1.572 0 2.961.431 3.947 1.086l1.107-1.666zM5.5 0C3.58 0 1.797.523.447 1.42l1.107 1.666C2.539 2.431 3.928 2 5.5 2V0zM0 2.253v13h2v-13H0zm1.553 13.833C2.539 15.431 3.928 15 5.5 15v-2c-1.92 0-3.703.523-5.053 1.42l1.107 1.666zM5.5 15c1.572 0 2.961.431 3.947 1.086l1.107-1.666C9.203 13.523 7.42 13 5.5 13v2zm5.053-11.914C11.539 2.431 12.928 2 14.5 2V0c-1.92 0-3.703.523-5.053 1.42l1.107 1.666zM14.5 2c1.573 0 2.961.431 3.947 1.086l1.107-1.666C18.203.523 16.421 0 14.5 0v2zm3.5.253v13h2v-13h-2zm1.553 12.167C18.203 13.523 16.421 13 14.5 13v2c1.573 0 2.961.431 3.947 1.086l1.107-1.666zM14.5 13c-1.92 0-3.703.523-5.053 1.42l1.107 1.666C11.539 15.431 12.928 15 14.5 15v-2z"
+    />
+  </svg>
+</template>
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\icons\IconEcosystem.vue ---
+<template>
+  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="20" fill="currentColor">
+    <path
+      d="M11.447 8.894a1 1 0 1 0-.894-1.789l.894 1.789zm-2.894-.789a1 1 0 1 0 .894 1.789l-.894-1.789zm0 1.789a1 1 0 1 0 .894-1.789l-.894 1.789zM7.447 7.106a1 1 0 1 0-.894 1.789l.894-1.789zM10 9a1 1 0 1 0-2 0h2zm-2 2.5a1 1 0 1 0 2 0H8zm9.447-5.606a1 1 0 1 0-.894-1.789l.894 1.789zm-2.894-.789a1 1 0 1 0 .894 1.789l-.894-1.789zm2 .789a1 1 0 1 0 .894-1.789l-.894 1.789zm-1.106-2.789a1 1 0 1 0-.894 1.789l.894-1.789zM18 5a1 1 0 1 0-2 0h2zm-2 2.5a1 1 0 1 0 2 0h-2zm-5.447-4.606a1 1 0 1 0 .894-1.789l-.894 1.789zM9 1l.447-.894a1 1 0 0 0-.894 0L9 1zm-2.447.106a1 1 0 1 0 .894 1.789l-.894-1.789zm-6 3a1 1 0 1 0 .894 1.789L.553 4.106zm2.894.789a1 1 0 1 0-.894-1.789l.894 1.789zm-2-.789a1 1 0 1 0-.894 1.789l.894-1.789zm1.106 2.789a1 1 0 1 0 .894-1.789l-.894 1.789zM2 5a1 1 0 1 0-2 0h2zM0 7.5a1 1 0 1 0 2 0H0zm8.553 12.394a1 1 0 1 0 .894-1.789l-.894 1.789zm-1.106-2.789a1 1 0 1 0-.894 1.789l.894-1.789zm1.106 1a1 1 0 1 0 .894 1.789l-.894-1.789zm2.894.789a1 1 0 1 0-.894-1.789l.894 1.789zM8 19a1 1 0 1 0 2 0H8zm2-2.5a1 1 0 1 0-2 0h2zm-7.447.394a1 1 0 1 0 .894-1.789l-.894 1.789zM1 15H0a1 1 0 0 0 .553.894L1 15zm1-2.5a1 1 0 1 0-2 0h2zm12.553 2.606a1 1 0 1 0 .894 1.789l-.894-1.789zM17 15l.447.894A1 1 0 0 0 18 15h-1zm1-2.5a1 1 0 1 0-2 0h2zm-7.447-5.394l-2 1 .894 1.789 2-1-.894-1.789zm-1.106 1l-2-1-.894 1.789 2 1 .894-1.789zM8 9v2.5h2V9H8zm8.553-4.894l-2 1 .894 1.789 2-1-.894-1.789zm.894 0l-2-1-.894 1.789 2 1 .894-1.789zM16 5v2.5h2V5h-2zm-4.553-3.894l-2-1-.894 1.789 2 1 .894-1.789zm-2.894-1l-2 1 .894 1.789 2-1L8.553.106zM1.447 5.894l2-1-.894-1.789-2 1 .894 1.789zm-.894 0l2 1 .894-1.789-2-1-.894 1.789zM0 5v2.5h2V5H0zm9.447 13.106l-2-1-.894 1.789 2 1 .894-1.789zm0 1.789l2-1-.894-1.789-2 1 .894 1.789zM10 19v-2.5H8V19h2zm-6.553-3.894l-2-1-.894 1.789 2 1 .894-1.789zM2 15v-2.5H0V15h2zm13.447 1.894l2-1-.894-1.789-2 1 .894 1.789zM18 15v-2.5h-2V15h2z"
+    />
+  </svg>
+</template>
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\icons\IconSupport.vue ---
+<template>
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor">
+    <path
+      d="M10 3.22l-.61-.6a5.5 5.5 0 0 0-7.666.105 5.5 5.5 0 0 0-.114 7.665L10 18.78l8.39-8.4a5.5 5.5 0 0 0-.114-7.665 5.5 5.5 0 0 0-7.666-.105l-.61.61z"
+    />
+  </svg>
+</template>
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\icons\IconTooling.vue ---
+<!-- This icon is from <https://github.com/Templarian/MaterialDesign>, distributed under Apache 2.0 (https://www.apache.org/licenses/LICENSE-2.0) license-->
+<template>
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    aria-hidden="true"
+    role="img"
+    class="iconify iconify--mdi"
+    width="24"
+    height="24"
+    preserveAspectRatio="xMidYMid meet"
+    viewBox="0 0 24 24"
+  >
+    <path
+      d="M20 18v-4h-3v1h-2v-1H9v1H7v-1H4v4h16M6.33 8l-1.74 4H7v-1h2v1h6v-1h2v1h2.41l-1.74-4H6.33M9 5v1h6V5H9m12.84 7.61c.1.22.16.48.16.8V18c0 .53-.21 1-.6 1.41c-.4.4-.85.59-1.4.59H4c-.55 0-1-.19-1.4-.59C2.21 19 2 18.53 2 18v-4.59c0-.32.06-.58.16-.8L4.5 7.22C4.84 6.41 5.45 6 6.33 6H7V5c0-.55.18-1 .57-1.41C7.96 3.2 8.44 3 9 3h6c.56 0 1.04.2 1.43.59c.39.41.57.86.57 1.41v1h.67c.88 0 1.49.41 1.83 1.22l2.34 5.39z"
+      fill="currentColor"
+    ></path>
+  </svg>
+</template>
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\layout\AppLayout.vue ---
+<template>
+  <div class="flex h-screen bg-slate-900 text-slate-200">
+    <aside class="w-64 flex-shrink-0 bg-black/30 p-4">
+      <h1 class="text-2xl font-bold text-white">Scriptorium</h1>
+      <nav class="mt-8">
+        <router-link
+          to="/"
+          class="block py-2 px-4 rounded font-semibold"
+          active-class="bg-teal-500/10 text-teal-400"
+        >
+          Dashboard
+        </router-link>
+      </nav>
+    </aside>
+
+    <main class="flex-1 overflow-y-auto p-8">
+      <slot />
+    </main>
+  </div>
+</template>
+
+<script setup lang="ts">
+// Import RouterLink to make it explicit, though it's often globally available.
+import { RouterLink } from 'vue-router';
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\components\__tests__\HelloWorld.spec.ts ---
+import { describe, it, expect } from 'vitest'
+
+import { mount } from '@vue/test-utils'
+import HelloWorld from '../HelloWorld.vue'
+
+describe('HelloWorld', () => {
+  it('renders properly', () => {
+    const wrapper = mount(HelloWorld, { props: { msg: 'Hello Vitest' } })
+    expect(wrapper.text()).toContain('Hello Vitest')
+  })
+})
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\composables\useApi.ts ---
+import axios from 'axios'
+
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL,
+})
+
+export { api as default } from '@/lib/api';
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\lib\api.ts ---
+import axios from 'axios';
+
+const apiClient = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// You can add interceptors here later for handling auth tokens or errors
+// apiClient.interceptors.request.use(...)
+
+export default apiClient;
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\lib\type.ts ---
+// You can auto-generate this with openapi-typescript
+// npx openapi-typescript http://localhost:8000/openapi.json --output src/lib/types.ts
+
+export interface ProjectRead {
+  id: string;
+  raw_blueprint: string;
+  status: string;
+  structured_outline?: Record<string, any>;
+  total_cost: number;
+}
+
+export interface PartRead {
+  id: string;
+  part_number: number;
+  title: string;
+  summary?: string;
+}
+
+export interface ChapterRead {
+  id: string;
+  chapter_number: number;
+  title: string;
+  status: string;
+  suggested_agent?: string;
+  part: PartRead;
+}
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\lib\types.ts ---
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+
+export interface paths {
+    "/projects/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a new book project
+         * @description Creates a new project record from a user's 'raw_blueprint'.
+         */
+        post: operations["create_new_project_projects__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Full Project Details
+         * @description Retrieves the full details of a project, including all its
+         *     parts and chapters, for display on a dashboard.
+         */
+        get: operations["get_project_details_projects__project_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/finalize-parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Finalize the Part structure of a book
+         * @description Takes a validated list of Parts from the user and creates the official
+         *     Part records in the database, finalizing the book's high-level structure.
+         */
+        put: operations["finalize_project_parts_projects__project_id__finalize_parts_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chapters/{chapter_id}/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Chapter Content Generation
+         * @description Queues a background job to write the content for a specific chapter
+         *     using the dynamically selected AI agent.
+         */
+        post: operations["queue_chapter_generation_chapters__chapter_id__generate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chapters/{chapter_id}/analyze-transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Transition Analysis
+         * @description Queues a background job for the Continuity Editor AI to analyze the
+         *     narrative flow between this chapter and the one preceding it.
+         *     The feedback is saved directly to the chapter in the database.
+         */
+        post: operations["queue_transition_analysis_chapters__chapter_id__analyze_transition_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/parts/{part_id}/finalize-chapters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Finalize the Chapter structure for a Part
+         * @description Takes a validated list of Chapters for a specific Part and creates the
+         *     official Chapter records in the database.
+         */
+        put: operations["finalize_part_chapters_parts__part_id__finalize_chapters_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/crew/generate-parts/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate High-Level Part Structure
+         * @description Queues a background job for the Architect AI to generate a high-level
+         *     list of Parts and their summaries from the project's raw blueprint.
+         */
+        post: operations["queue_part_generation_crew_generate_parts__project_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/crew/generate-chapters/{part_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Detailed Chapter Outline for a Part
+         * @description Queues a background job to generate a detailed chapter outline for a
+         *     specific part of the book.
+         */
+        post: operations["queue_chapter_detailing_crew_generate_chapters__part_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/crew/projects/{project_id}/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Introduction or Conclusion
+         * @description Queues a background job for the Theorist AI to write the book's
+         *     introduction or conclusion based on the full content.
+         */
+        post: operations["queue_finalization_crew_projects__project_id__finalize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/crew/crew/status/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job Status */
+        get: operations["job_status_crew_crew_status__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health Check */
+        get: operations["health_check__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+}
+export type webhooks = Record<string, never>;
+export interface components {
+    schemas: {
+        /**
+         * ChapterBrief
+         * @description A structured writing brief for a specialist agent.
+         */
+        ChapterBrief: {
+            /**
+             * Thesis Statement
+             * @description The central thesis or main argument the chapter must defend.
+             */
+            thesis_statement: string;
+            /**
+             * Narrative Arc
+             * @description A description of the chapter's narrative structure.
+             */
+            narrative_arc: string;
+            /**
+             * Required Inclusions
+             * @description A list of non-negotiable concepts that MUST be included.
+             */
+            required_inclusions: string[];
+            /**
+             * Key Questions To Answer
+             * @description The specific questions the chapter must answer.
+             */
+            key_questions_to_answer: string[];
+        };
+        /**
+         * ChapterListOutline
+         * @description A Pydantic model for a list of chapters for a single part.
+         */
+        ChapterListOutline: {
+            /** Chapters */
+            chapters: components["schemas"]["ChapterOutline"][];
+        };
+        /**
+         * ChapterOutline
+         * @description Defines the structure for a single chapter.
+         */
+        ChapterOutline: {
+            /** Chapter Number */
+            chapter_number: number;
+            /** Title */
+            title: string;
+            brief: components["schemas"]["ChapterBrief"];
+            /** Suggested Agent */
+            suggested_agent: string;
+        };
+        /**
+         * ChapterRead
+         * @description Read schema for a single Chapter, using the 'brief' field.
+         */
+        ChapterRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Chapter Number */
+            chapter_number: number;
+            /** Title */
+            title: string;
+            brief?: components["schemas"]["ChapterBrief"] | null;
+            /** Status */
+            status: string;
+            /** Suggested Agent */
+            suggested_agent?: string | null;
+            part: components["schemas"]["PartRead"];
+        };
+        /** FinalizationRequest */
+        FinalizationRequest: {
+            /**
+             * Task Type
+             * @description The type of finalization task to run, e.g., 'introduction' or 'conclusion'.
+             */
+            task_type: string;
+        };
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /** PartListOutline */
+        PartListOutline: {
+            /**
+             * Parts
+             * @description List of book parts
+             */
+            parts: components["schemas"]["PartOnlyOutline"][];
+        };
+        /** PartOnlyOutline */
+        PartOnlyOutline: {
+            /**
+             * Part Number
+             * @description Numerical order of the part
+             */
+            part_number: number;
+            /**
+             * Title
+             * @description Title of the part
+             */
+            title: string;
+            /**
+             * Summary
+             * @description Brief summary of the part's content
+             */
+            summary: string;
+        };
+        /**
+         * PartRead
+         * @description Read schema for a single Part.
+         */
+        PartRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Part Number */
+            part_number: number;
+            /** Title */
+            title: string;
+            /** Summary */
+            summary?: string | null;
+        };
+        /**
+         * PartReadWithChapters
+         * @description Read schema for a Part that includes its nested Chapters.
+         */
+        PartReadWithChapters: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Part Number */
+            part_number: number;
+            /** Title */
+            title: string;
+            /** Summary */
+            summary?: string | null;
+            /**
+             * Chapters
+             * @default []
+             */
+            chapters: components["schemas"]["ChapterRead"][];
+        };
+        /**
+         * ProjectCreate
+         * @description The schema for creating a project from a raw text blueprint.
+         */
+        ProjectCreate: {
+            /** Raw Blueprint */
+            raw_blueprint: string;
+        };
+        /**
+         * ProjectDetailRead
+         * @description Read schema for a full Project, including all its Parts and Chapters.
+         */
+        ProjectDetailRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Raw Blueprint */
+            raw_blueprint: string;
+            /** Status */
+            status: string;
+            /** Structured Outline */
+            structured_outline?: {
+                [key: string]: unknown;
+            } | null;
+            /** Total Cost */
+            total_cost: string;
+            /**
+             * Parts
+             * @default []
+             */
+            parts: components["schemas"]["PartReadWithChapters"][];
+        };
+        /**
+         * ProjectRead
+         * @description Base read schema for a project.
+         */
+        ProjectRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Raw Blueprint */
+            raw_blueprint: string;
+            /** Status */
+            status: string;
+            /** Structured Outline */
+            structured_outline?: {
+                [key: string]: unknown;
+            } | null;
+            /** Total Cost */
+            total_cost: string;
+        };
+        /**
+         * TaskStatus
+         * @description A simple schema for returning the status of a queued job.
+         */
+        TaskStatus: {
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+        };
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+        };
+    };
+    responses: never;
+    parameters: never;
+    requestBodies: never;
+    headers: never;
+    pathItems: never;
+}
+export type $defs = Record<string, never>;
+export interface operations {
+    create_new_project_projects__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_details_projects__project_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDetailRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finalize_project_parts_projects__project_id__finalize_parts_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PartListOutline"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDetailRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_chapter_generation_chapters__chapter_id__generate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chapter_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_transition_analysis_chapters__chapter_id__analyze_transition_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chapter_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finalize_part_chapters_parts__part_id__finalize_chapters_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                part_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChapterListOutline"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PartReadWithChapters"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_part_generation_crew_generate_parts__project_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_chapter_detailing_crew_generate_chapters__part_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                part_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_finalization_crew_projects__project_id__finalize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FinalizationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    job_status_crew_crew_status__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    health_check__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+}
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\pages\Dashboard.vue ---
+<template>
+  <AppLayout>
+    <div class="flex justify-between items-center mb-6">
+      <h1 class="text-3xl font-bold text-teal-400">Projects Dashboard</h1>
+      <button @click="isModalOpen = true" class="px-4 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 transition-colors">
+        + New Project
+      </button>
+    </div>
+    
+    <div v-if="projectStore.isLoading && projectStore.projects.length === 0" class="text-center text-slate-400">Loading projects...</div>
+    <div v-else>
+       <div v-if="projectStore.projects.length === 0" class="p-6 bg-slate-800 rounded-lg text-center">
+        <p class="font-semibold">No projects found.</p>
+        <button @click="isModalOpen = true" class="mt-4 px-4 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 transition-colors">
+          Create Your First Book
+        </button>
+      </div>
+      
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <ProjectCard 
+          v-for="project in projectStore.projects" 
+          :key="project.id" 
+          :project="project"
+        />
+      </div>
+    </div>
+  </AppLayout>
+
+  <ProjectCreateModal :visible="isModalOpen" @close="isModalOpen = false" />
+</template>
+
+<script setup lang="ts">
+import { onMounted, ref } from 'vue';
+import AppLayout from '@/components/layout/AppLayout.vue';
+import ProjectCard from '@/components/features/projects/ProjectCard.vue';
+import ProjectCreateModal from '@/components/features/projects/ProjectCreateModal.vue'; // Import the modal
+import { useProjectStore } from '@/stores/project';
+
+const projectStore = useProjectStore();
+const isModalOpen = ref(false); // Add state to control the modal
+
+onMounted(() => {
+  projectStore.fetchProjects();
+});
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\pages\ProjectDetailPage.vue ---
+<template>
+  <AppLayout>
+    <div v-if="projectStore.isLoading && !project">Loading Project...</div>
+    <div v-else-if="projectStore.error" class="text-red-400">{{ projectStore.error }}</div>
+    <div v-else-if="project" class="space-y-8">
+
+      <div>
+        <h1 class="text-3xl font-bold text-teal-400 mb-2">{{ `Project: ${project.id.substring(0, 8)}...` }}</h1>
+        <span class="inline-block px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-300 capitalize">
+          {{ project.status.replace(/_/g, ' ').toLowerCase() }}
+        </span>
+      </div>
+
+      <div class="p-6 bg-slate-800 rounded-lg">
+        <h2 class="text-xl font-semibold mb-3">Raw Blueprint</h2>
+        <p class="text-slate-300 whitespace-pre-wrap">{{ project.raw_blueprint }}</p>
+      </div>
+      
+      <div class="p-6 bg-slate-800 rounded-lg">
+        <h2 class="text-xl font-semibold mb-4">Book Structure</h2>
+
+        <div v-if="project.status === 'RAW_IDEA'">
+          <div class="text-center p-4 border-2 border-dashed border-slate-700 rounded-lg">
+            <p class="text-slate-400 mb-4">This project is a raw idea. The first step is to generate the part outline.</p>
+            <button 
+              @click="handleGenerateParts"
+              :disabled="projectStore.processingIds.has(project.id)"
+              class="px-4 py-2 rounded-md font-semibold transition-colors"
+              :class="{
+                'bg-teal-600 hover:bg-teal-500': !projectStore.processingIds.has(project.id),
+                'bg-slate-500 cursor-not-allowed': projectStore.processingIds.has(project.id)
+              }"
+            >
+              {{ projectStore.processingIds.has(project.id) ? 'Processing...' : 'Generate Part Outline' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-else-if="project.status === 'PARTS_PENDING_VALIDATION' && project.structured_outline">
+          <h3 class="text-teal-400 font-semibold mb-3">Draft Ready for Review</h3>
+          <PartEditor 
+            :project-id="project.id"
+            :draft-parts="project.structured_outline" 
+          />
+        </div>
+
+        <div v-else-if="project.parts && project.parts.length > 0">
+          <h3 class="text-teal-400 font-semibold mb-4">Finalized Structure</h3>
+          <div class="space-y-4">
+            <div v-for="part in project.parts" :key="part.id" class="p-4 bg-slate-900 rounded-md">
+              <div class="flex justify-between items-center">
+                <div>
+                  <strong class="text-white">Part {{ part.part_number }}:</strong>
+                  <span class="ml-2 text-slate-300">{{ part.title }}</span>
+                </div>
+                <button 
+                  v-if="project.status === 'PARTS_VALIDATED'"
+                  @click="handleGenerateChapters(part.id)"
+                  :disabled="projectStore.processingIds.has(part.id)"
+                  class="px-3 py-1 text-sm rounded-md font-semibold transition-colors"
+                  :class="{
+                    'bg-teal-600 hover:bg-teal-500': !projectStore.processingIds.has(part.id),
+                    'bg-slate-500 cursor-not-allowed': projectStore.processingIds.has(part.id)
+                  }"
+                >
+                  {{ projectStore.processingIds.has(part.id) ? 'Processing...' : 'Detail Chapters' }}
+                </button>
+              </div>
+              
+              <div v-if="part.chapters && part.chapters.length > 0" class="mt-4 pl-6 border-l-2 border-slate-700 space-y-3">
+                <details v-for="chapter in part.chapters" :key="chapter.id" class="bg-slate-800/50 rounded-lg">
+                  <summary class="p-2 cursor-pointer hover:bg-slate-700/50 rounded-lg list-none">
+                    <div class="flex justify-between items-center">
+                      <p class="text-sm text-slate-300 font-medium">
+                        <strong>Ch {{ chapter.chapter_number }}:</strong> {{ chapter.title }}
+                        <span class="ml-2 text-xs capitalize px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">
+                          {{ chapter.status.replace(/_/g, ' ') }}
+                        </span>
+                      </p>
+                      <button
+                        v-if="!chapter.content && chapter.status !== 'BRIEF_COMPLETE'"
+                        @click.prevent="handleGenerateContent(chapter.id)"
+                        :disabled="projectStore.processingIds.has(chapter.id)"
+                        class="px-3 py-1 text-xs rounded-md font-semibold transition-colors z-10"
+                        :class="{
+                          'bg-sky-600 hover:bg-sky-500': !projectStore.processingIds.has(chapter.id),
+                          'bg-slate-500 cursor-not-allowed': projectStore.processingIds.has(chapter.id)
+                        }"
+                      >
+                        {{ projectStore.processingIds.has(chapter.id) ? 'Processing...' : 'Generate Content' }}
+                      </button>
+                    </div>
+                  </summary>
+
+                  <div v-if="chapter.brief" class="p-4 border-t border-slate-700 text-xs space-y-3">
+                    <div v-for="(value, key) in chapter.brief" :key="key">
+                      <h4 class="font-semibold text-slate-400 capitalize">{{ key.replace(/_/g, ' ') }}</h4>
+                      <p class="mt-1 pl-2 border-l-2 border-slate-600 text-slate-300 whitespace-pre-wrap">{{ value }}</p>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+          
+          <div v-if="project.status === 'CHAPTERS_PENDING_VALIDATION' && project.structured_outline && project.structured_outline.chapters">
+            <ChapterEditor
+              :project-id="project.id"
+              :part-id="selectedPartId" 
+              :draft-chapters="project.structured_outline"
+            />
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </AppLayout>
+</template>
+<script setup lang="ts">
+import { onMounted, computed, ref } from 'vue';
+import { useProjectStore } from '@/stores/project';
+import AppLayout from '@/components/layout/AppLayout.vue';
+import PartEditor from '@/components/features/projects/PartEditor.vue';
+import ChapterEditor from '@/components/features/projects/ChapterEditor.vue';
+
+const props = defineProps<{ id: string }>();
+const projectStore = useProjectStore();
+
+// This computed property points to the single project being viewed
+const project = computed(() => projectStore.activeProject);
+
+// This state tracks which part we are currently detailing chapters for
+const selectedPartId = ref<string>('');
+
+// Fetch the project data when the page loads
+onMounted(() => {
+  projectStore.fetchProjectById(props.id);
+});
+
+// Add this new handler function
+const handleGenerateContent = async (chapterId: string) => {
+  await projectStore.generateChapterContent(chapterId);
+};
+
+// Handler to trigger the parts generation AI
+const handleGenerateParts = async () => {
+  await projectStore.generateParts(props.id);
+};
+
+// Handler to trigger the chapters generation AI for a specific part
+const handleGenerateChapters = async (partId: string) => {
+  selectedPartId.value = partId; // Keep track of which part was clicked
+  await projectStore.generateChapters(partId);
+};
+</script>
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\router\index.ts ---
+import { createRouter, createWebHistory } from 'vue-router';
+import Dashboard from '@/pages/Dashboard.vue';
+import ProjectDetailPage from '@/pages/ProjectDetailPage.vue';
+
+const routes = [
+  {
+    path: '/',
+    name: 'Dashboard',
+    component: Dashboard,
+  },
+  {
+    path: '/projects/:id', // A dynamic route for a single project
+    name: 'ProjectDetail',
+    component: ProjectDetailPage,
+    props: true, // Pass route params as component props
+  },
+];
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes,
+});
+
+export default router;
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\stores\project.ts ---
+import { defineStore } from 'pinia';
+import apiClient from '@/lib/api'; // Use our centralized API client
+import { useTaskStore } from './task'; // Import the new task store
+
+// Define a type for our project - this should match your backend schema
+interface Project {
+  id: string;
+  raw_blueprint: string;
+  status: string;
+  total_cost: string; // <-- FIX: Change from number to string
+  // Add this field to match your backend data
+  structured_outline?: { [key: string]: any } | null; 
+}
+
+// Add these types for clarity
+interface Part {
+  part_number: number;
+  title: string;
+  summary: string;
+}
+
+interface FinalizePartsPayload {
+  parts: Part[];
+}
+
+// Add these new types for the chapter finalization payload
+interface ChapterBrief {
+  thesis_statement: string;
+  narrative_arc: string;
+  required_inclusions: string[];
+  key_questions_to_answer: string[];
+}
+interface Chapter {
+  chapter_number: number;
+  title: string;
+  brief: ChapterBrief;
+  suggested_agent: string;
+}
+interface FinalizeChaptersPayload {
+  chapters: Chapter[];
+}
+
+export const useProjectStore = defineStore('project', {
+  state: () => ({
+    projects: [] as Project[],
+    activeProject: null as Project | null, 
+    isLoading: false,
+    processingIds: new Set<string>(), // <-- It was declared here
+    error: null as string | null,
+    activePolls: new Map<string, number>(),
+  }),
+actions: {
+       /**
+     * Polls the job status endpoint until the job is complete or fails.
+     * @param jobId The ID of the job to poll.
+     * @param onComplete A callback function to run when the job is successful.
+     */
+    pollJobStatus(jobId: string, onComplete: () => void) {
+      const intervalId = window.setInterval(async () => {
+        try {
+          console.log(`Polling status for job: ${jobId}`);
+          const response = await apiClient.get(`/crew/status/${jobId}`);
+          const status = response.data.status;
+
+          if (status === 'complete' || status === 'success') {
+            console.log(`Job ${jobId} completed successfully!`);
+            clearInterval(intervalId);
+            this.activePolls.delete(jobId);
+            onComplete(); // Run the success callback
+          } else if (status === 'failed' || status === 'error') {
+            console.error(`Job ${jobId} failed.`);
+            clearInterval(intervalId);
+            this.activePolls.delete(jobId);
+            // You can add error handling here, e.g., show a notification
+          }
+        } catch (error) {
+          console.error(`Error polling job ${jobId}:`, error);
+          clearInterval(intervalId);
+          this.activePolls.delete(jobId);
+        }
+      }, 3000); // Poll every 3 seconds
+
+      this.activePolls.set(jobId, intervalId);
+    },
+
+  // --- FETCH ACTIONS ---
+  async fetchProjects() {
+    this.isLoading = true;
+    this.error = null;
+    try {
+      console.log(`➡️ [API Request] GET /projects`);
+      const response = await apiClient.get('/projects');
+      console.log(`✅ [API Response] Received ${response.data.length} projects.`);
+      this.projects = response.data;
+    } catch (err: any) {
+      console.error(`❌ [API Error] Failed to fetch projects:`, err);
+      this.error = err.message || 'Failed to fetch projects.';
+    } finally {
+      this.isLoading = false;
+    }
+  },
+
+  async fetchProjectById(id: string) {
+    this.isLoading = true;
+    this.error = null;
+    try {
+      console.log(`➡️ [API Request] GET /projects/${id}`);
+      const response = await apiClient.get(`/projects/${id}`);
+      console.log(`✅ [API Response] Received project details:`, response.data);
+      this.activeProject = response.data;
+    } catch (err: any) {
+      console.error(`❌ [API Error] Failed to fetch project ${id}:`, err);
+      this.error = `Failed to fetch project ${id}.`;
+    } finally {
+      this.isLoading = false;
+    }
+  },
+
+  // --- CREATE ACTION ---
+  async createProject(blueprint: string) {
+    this.isLoading = true;
+    this.error = null;
+    try {
+      console.log(`➡️ [API Request] POST /projects with blueprint: "${blueprint.substring(0, 50)}..."`);
+      await apiClient.post('/projects', { raw_blueprint: blueprint });
+      console.log(`✅ [API Success] Project created. Refreshing project list...`);
+      await this.fetchProjects(); 
+    } catch (err: any) {
+      console.error(`❌ [API Error] Failed to create project:`, err);
+      this.error = err.message || 'Failed to create project.';
+      throw err;
+    } finally {
+      this.isLoading = false;
+    }
+  },
+
+  // --- GENERATION ACTIONS ---
+  async generateParts(projectId: string) {
+    this.processingIds.add(projectId); // Instantly mark as processing
+    this.error = null;
+    try {
+      const response = await apiClient.post(`/crew/generate-parts/${projectId}`);
+      const taskStore = useTaskStore();
+      // Tell the task store to handle polling from here
+      taskStore.pollJobStatus(response.data.job_id, projectId);
+    } catch (err: any) {
+      console.error(`❌ [API Error] Failed to start part generation for project ${projectId}:`, err);
+      this.processingIds.delete(projectId); // Clean up on initial failure
+    }
+  },
+
+  async generateChapters(partId: string) {
+    const projectId = this.activeProject?.id;
+    if (!projectId) return;
+
+    this.processingIds.add(partId); // Mark part as processing
+    this.error = null;
+    try {
+      const response = await apiClient.post(`/crew/generate-chapters/${partId}`);
+      const taskStore = useTaskStore();
+      taskStore.pollJobStatus(response.data.job_id, projectId);
+    } catch (err: any) {
+      console.error(`❌ [API Error] Failed to start chapter detailing for part ${partId}:`, err);
+      this.processingIds.delete(partId);
+    }
+  },
+
+  async generateChapterContent(chapterId: string) {
+    const projectId = this.activeProject?.id;
+    if (!projectId) return;
+
+    this.processingIds.add(chapterId); // Mark chapter as processing
+    this.error = null;
+    try {
+      const response = await apiClient.post(`/chapters/${chapterId}/generate`);
+      const taskStore = useTaskStore();
+      taskStore.pollJobStatus(response.data.job_id, projectId);
+    } catch (err: any) {
+      console.error(`❌ [API Error] Failed to generate content for chapter ${chapterId}:`, err);
+      this.processingIds.delete(chapterId);
+    }
+  },
+
+  // --- FINALIZE ACTIONS ---
+  async finalizeParts(id: string, partsData: FinalizePartsPayload) {
+    this.isLoading = true;
+    try {
+      console.log(`➡️ [API Request] PUT /projects/${id}/finalize-parts with payload:`, partsData);
+      await apiClient.put(`/projects/${id}/finalize-parts`, partsData);
+      console.log(`✅ [API Success] Parts finalized. Refreshing project data...`);
+      await this.fetchProjectById(id);
+    } catch (err: any) {
+      console.error(`❌ [API Error] Failed to finalize parts for project ${id}:`, err);
+      this.error = `Failed to finalize parts for project ${id}.`;
+      throw err;
+    } finally {
+      this.isLoading = false;
+    }
+  },
+
+  async finalizeChapters(partId: string, chaptersData: FinalizeChaptersPayload) {
+    const projectId = this.activeProject?.id;
+    if (!projectId) return;
+
+    this.isLoading = true;
+    try {
+      console.log(`➡️ [API Request] PUT /parts/${partId}/finalize-chapters with payload:`, chaptersData);
+      await apiClient.put(`/parts/${partId}/finalize-chapters`, chaptersData);
+      console.log(`✅ [API Success] Chapters finalized for part ${partId}. Refreshing project data...`);
+      await this.fetchProjectById(projectId);
+    } catch (err: any) {
+      this.error = `Failed to finalize chapters for part ${partId}.`;
+      console.error(err);
+      throw err;
+    } finally {
+      this.isLoading = false;
+    }
+  },
+},
+  getters: {
+    projectCount: (state) => state.projects.length,
+  },
+});
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\stores\task.ts ---
+// frontend/src/stores/task.ts
+
+import { defineStore } from 'pinia';
+import apiClient from '@/lib/api';
+import { useProjectStore } from './project'; // We'll need this to refresh the project data
+
+export const useTaskStore = defineStore('task', {
+  state: () => ({
+    // Using a Map to store interval IDs allows us to cancel them later
+    activePolls: new Map<string, number>(),
+  }),
+  actions: {
+    /**
+     * Polls the job status endpoint until the job is complete or fails.
+     * @param jobId The ID of the job to poll.
+     * @param projectId The ID of the project to refresh upon completion.
+     */
+
+  pollJobStatus(jobId: string, projectId: string) {
+    const projectStore = useProjectStore();
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const response = await apiClient.get(`/crew/status/${jobId}`);
+        const status = response.data.status;
+
+        if (status === 'complete' || status === 'success') {
+          clearInterval(intervalId);
+          this.activePolls.delete(jobId);
+          
+          // On success, refresh the project and remove the processing ID
+          projectStore.fetchProjectById(projectId);
+          projectStore.processingIds.delete(projectId); // <-- ADD THIS LINE
+
+        } else if (status === 'failed' || status === 'error') {
+          clearInterval(intervalId);
+          this.activePolls.delete(jobId);
+          projectStore.processingIds.delete(projectId); // <-- ADD THIS LINE
+          projectStore.error = `Job ${jobId} failed.`;
+        }
+      } catch (error) {
+        clearInterval(intervalId);
+        this.activePolls.delete(jobId);
+        projectStore.processingIds.delete(projectId); // <-- ADD THIS LINE
+      }
+    }, 3000);
+
+    this.activePolls.set(jobId, intervalId);
+  },
+
+  },
+});
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\views\AboutView.vue ---
+<template>
+  <div class="about">
+    <h1>This is an about page</h1>
+  </div>
+</template>
+
+<style>
+@media (min-width: 1024px) {
+  .about {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+  }
+}
+</style>
+
+
+--- FILE: C:\Projects\57-scriptorium-engine\frontend\src\views\HomeView.vue ---
+<script setup lang="ts">
+import TheWelcome from '../components/TheWelcome.vue'
+</script>
+
+<template>
+  <main>
+    <TheWelcome />
+  </main>
+</template>

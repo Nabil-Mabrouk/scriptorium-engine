@@ -2,221 +2,189 @@ import { defineStore } from 'pinia';
 import apiClient from '@/lib/api'; // Use our centralized API client
 import { useTaskStore } from './task'; // Import the new task store
 
-// Define a type for our project - this should match your backend schema
-interface Project {
-  id: string;
-  raw_blueprint: string;
-  status: string;
-  total_cost: string; // <-- FIX: Change from number to string
-  // Add this field to match your backend data
-  structured_outline?: { [key: string]: any } | null; 
-}
+// IMPORTER: Import all necessary types from the auto-generated types.ts
+import type { 
+  ProjectRead, 
+  ProjectCreate, // For createProject payload
+  ProjectDetailRead, // For activeProject
+  PartRead, // Used in ProjectDetailRead's parts array
+  ChapterRead, // Used in ProjectDetailRead's chapters array
+  PartOnlyOutline, // Used for finalizeParts payload
+  PartListOutline, // Used for finalizeParts payload
+  ChapterOutline, // Used for finalizeChapters payload
+  ChapterListOutline, // Used for finalizeChapters payload
+  ChapterBrief, // Used within ChapterOutline
+  TaskStatus // For API responses from task queuing
+} from '@/lib/types';
 
-// Add these types for clarity
-interface Part {
-  part_number: number;
-  title: string;
-  summary: string;
-}
-
-interface FinalizePartsPayload {
-  parts: Part[];
-}
-
-// Add these new types for the chapter finalization payload
-interface ChapterBrief {
-  thesis_statement: string;
-  narrative_arc: string;
-  required_inclusions: string[];
-  key_questions_to_answer: string[];
-}
-interface Chapter {
-  chapter_number: number;
-  title: string;
-  brief: ChapterBrief;
-  suggested_agent: string;
-}
-interface FinalizeChaptersPayload {
-  chapters: Chapter[];
-}
 
 export const useProjectStore = defineStore('project', {
   state: () => ({
-    projects: [] as Project[],
-    activeProject: null as Project | null, 
+    // Use ProjectRead for the projects list
+    projects: [] as ProjectRead[],
+    // Use ProjectDetailRead for the active project, as it contains nested parts and chapters
+    activeProject: null as ProjectDetailRead | null, 
     isLoading: false,
-    processingIds: new Set<string>(), // <-- It was declared here
+    processingIds: new Set<string>(), 
     error: null as string | null,
-    activePolls: new Map<string, number>(),
+    // REMOVED: activePolls is now managed solely by the task store
   }),
-actions: {
-       /**
-     * Polls the job status endpoint until the job is complete or fails.
-     * @param jobId The ID of the job to poll.
-     * @param onComplete A callback function to run when the job is successful.
-     */
-    pollJobStatus(jobId: string, onComplete: () => void) {
-      const intervalId = window.setInterval(async () => {
-        try {
-          console.log(`Polling status for job: ${jobId}`);
-          const response = await apiClient.get(`/crew/status/${jobId}`);
-          const status = response.data.status;
+  actions: {
+    // REMOVED: pollJobStatus action is now managed solely by the task store
 
-          if (status === 'complete' || status === 'success') {
-            console.log(`Job ${jobId} completed successfully!`);
-            clearInterval(intervalId);
-            this.activePolls.delete(jobId);
-            onComplete(); // Run the success callback
-          } else if (status === 'failed' || status === 'error') {
-            console.error(`Job ${jobId} failed.`);
-            clearInterval(intervalId);
-            this.activePolls.delete(jobId);
-            // You can add error handling here, e.g., show a notification
-          }
-        } catch (error) {
-          console.error(`Error polling job ${jobId}:`, error);
-          clearInterval(intervalId);
-          this.activePolls.delete(jobId);
-        }
-      }, 3000); // Poll every 3 seconds
-
-      this.activePolls.set(jobId, intervalId);
+    // --- FETCH ACTIONS ---
+    async fetchProjects() {
+      this.isLoading = true;
+      this.error = null;
+      try {
+        console.log(`➡️ [API Request] GET /projects`);
+        // Type the response data as an array of ProjectRead
+        const response = await apiClient.get<ProjectRead[]>('/projects');
+        console.log(`✅ [API Response] Received ${response.data.length} projects.`);
+        this.projects = response.data;
+      } catch (err: any) {
+        console.error(`❌ [API Error] Failed to fetch projects:`, err);
+        this.error = err.message || 'Failed to fetch projects.';
+      } finally {
+        this.isLoading = false;
+      }
     },
 
-  // --- FETCH ACTIONS ---
-  async fetchProjects() {
-    this.isLoading = true;
-    this.error = null;
-    try {
-      console.log(`➡️ [API Request] GET /projects`);
-      const response = await apiClient.get('/projects');
-      console.log(`✅ [API Response] Received ${response.data.length} projects.`);
-      this.projects = response.data;
-    } catch (err: any) {
-      console.error(`❌ [API Error] Failed to fetch projects:`, err);
-      this.error = err.message || 'Failed to fetch projects.';
-    } finally {
-      this.isLoading = false;
-    }
+    async fetchProjectById(id: string) {
+      this.isLoading = true;
+      this.error = null;
+      try {
+        console.log(`➡️ [API Request] GET /projects/${id}`);
+        // Type the response data as ProjectDetailRead
+        const response = await apiClient.get<ProjectDetailRead>(`/projects/${id}`);
+        console.log(`✅ [API Response] Received project details:`, response.data);
+        this.activeProject = response.data;
+      } catch (err: any) {
+        console.error(`❌ [API Error] Failed to fetch project ${id}:`, err);
+        this.error = `Failed to fetch project ${id}.`;
+      } finally {
+        this.isLoading = false;
+      }
+    },
+
+    // --- CREATE ACTION ---
+    async createProject(blueprint: string) {
+      this.isLoading = true;
+      this.error = null;
+      try {
+        console.log(`➡️ [API Request] POST /projects with blueprint: "${blueprint.substring(0, 50)}..."`);
+        // Payload type is ProjectCreate, response type is ProjectRead
+        await apiClient.post<ProjectRead>('/projects', { raw_blueprint: blueprint } as ProjectCreate);
+        console.log(`✅ [API Success] Project created. Refreshing project list...`);
+        await this.fetchProjects(); 
+      } catch (err: any) {
+        console.error(`❌ [API Error] Failed to create project:`, err);
+        this.error = err.message || 'Failed to create project.';
+        throw err;
+      } finally {
+        this.isLoading = false;
+      }
+    },
+
+    // --- GENERATION ACTIONS ---
+    async generateParts(projectId: string) {
+      this.processingIds.add(projectId); // Instantly mark as processing
+      this.error = null;
+      try {
+        // Response type is TaskStatus
+        const response = await apiClient.post<TaskStatus>(`/crew/generate-parts/${projectId}`);
+        const taskStore = useTaskStore();
+        // Pass projectId for both entityIdToUpdateStatusFor and projectIdToRefresh
+        taskStore.pollJobStatus(response.data.job_id, projectId, projectId);
+      } catch (err: any) {
+        console.error(`❌ [API Error] Failed to start part generation for project ${projectId}:`, err);
+        this.processingIds.delete(projectId); // Clean up on initial failure
+      }
+    },
+
+    async generateChapters(partId: string) {
+      const projectId = this.activeProject?.id;
+      if (!projectId) {
+        console.warn('Cannot generate chapters: No active project found.');
+        return;
+      }
+
+      this.processingIds.add(partId); // Mark part as processing
+      this.error = null;
+      try {
+        // Response type is TaskStatus
+        const response = await apiClient.post<TaskStatus>(`/crew/generate-chapters/${partId}`);
+        const taskStore = useTaskStore();
+        // Pass partId for entityIdToUpdateStatusFor, projectId for projectIdToRefresh
+        taskStore.pollJobStatus(response.data.job_id, partId, projectId);
+      } catch (err: any) {
+        console.error(`❌ [API Error] Failed to start chapter detailing for part ${partId}:`, err);
+        this.processingIds.delete(partId);
+      }
+    },
+
+    async generateChapterContent(chapterId: string) {
+      const projectId = this.activeProject?.id;
+      if (!projectId) {
+        console.warn('Cannot generate chapter content: No active project found.');
+        return;
+      }
+
+      this.processingIds.add(chapterId); // Mark chapter as processing
+      this.error = null;
+      try {
+        // Response type is TaskStatus
+        const response = await apiClient.post<TaskStatus>(`/chapters/${chapterId}/generate`);
+        const taskStore = useTaskStore();
+        // Pass chapterId for entityIdToUpdateStatusFor, projectId for projectIdToRefresh
+        taskStore.pollJobStatus(response.data.job_id, chapterId, projectId);
+      } catch (err: any) {
+        console.error(`❌ [API Error] Failed to generate content for chapter ${chapterId}:`, err);
+        this.processingIds.delete(chapterId);
+      }
+    },
+
+    // --- FINALIZE ACTIONS ---
+    async finalizeParts(id: string, partsData: PartListOutline) {
+      this.isLoading = true;
+      try {
+        console.log(`➡️ [API Request] PUT /projects/${id}/finalize-parts with payload:`, partsData);
+        // Payload type is PartListOutline, response type is ProjectDetailRead
+        await apiClient.put<ProjectDetailRead>(`/projects/${id}/finalize-parts`, partsData);
+        console.log(`✅ [API Success] Parts finalized. Refreshing project data...`);
+        await this.fetchProjectById(id);
+      } catch (err: any) {
+        console.error(`❌ [API Error] Failed to finalize parts for project ${id}:`, err);
+        this.error = `Failed to finalize parts for project ${id}.`;
+        throw err;
+      } finally {
+        this.isLoading = false;
+      }
+    },
+
+    async finalizeChapters(partId: string, chaptersData: ChapterListOutline) {
+      const projectId = this.activeProject?.id;
+      if (!projectId) {
+        console.warn('Cannot finalize chapters: No active project found.');
+        return;
+      }
+
+      this.isLoading = true;
+      try {
+        console.log(`➡️ [API Request] PUT /parts/${partId}/finalize-chapters with payload:`, chaptersData);
+        // Payload type is ChapterListOutline, response type is PartReadWithChapters (implicitly handled by fetchProjectById)
+        await apiClient.put(`/parts/${partId}/finalize-chapters`, chaptersData);
+        console.log(`✅ [API Success] Chapters finalized for part ${partId}. Refreshing project data...`);
+        await this.fetchProjectById(projectId);
+      } catch (err: any) {
+        this.error = `Failed to finalize chapters for part ${partId}.`;
+        console.error(err);
+        throw err;
+      } finally {
+        this.isLoading = false;
+      }
+    },
   },
-
-  async fetchProjectById(id: string) {
-    this.isLoading = true;
-    this.error = null;
-    try {
-      console.log(`➡️ [API Request] GET /projects/${id}`);
-      const response = await apiClient.get(`/projects/${id}`);
-      console.log(`✅ [API Response] Received project details:`, response.data);
-      this.activeProject = response.data;
-    } catch (err: any) {
-      console.error(`❌ [API Error] Failed to fetch project ${id}:`, err);
-      this.error = `Failed to fetch project ${id}.`;
-    } finally {
-      this.isLoading = false;
-    }
-  },
-
-  // --- CREATE ACTION ---
-  async createProject(blueprint: string) {
-    this.isLoading = true;
-    this.error = null;
-    try {
-      console.log(`➡️ [API Request] POST /projects with blueprint: "${blueprint.substring(0, 50)}..."`);
-      await apiClient.post('/projects', { raw_blueprint: blueprint });
-      console.log(`✅ [API Success] Project created. Refreshing project list...`);
-      await this.fetchProjects(); 
-    } catch (err: any) {
-      console.error(`❌ [API Error] Failed to create project:`, err);
-      this.error = err.message || 'Failed to create project.';
-      throw err;
-    } finally {
-      this.isLoading = false;
-    }
-  },
-
-  // --- GENERATION ACTIONS ---
-  async generateParts(projectId: string) {
-    this.processingIds.add(projectId); // Instantly mark as processing
-    this.error = null;
-    try {
-      const response = await apiClient.post(`/crew/generate-parts/${projectId}`);
-      const taskStore = useTaskStore();
-      // Tell the task store to handle polling from here
-      taskStore.pollJobStatus(response.data.job_id, projectId);
-    } catch (err: any) {
-      console.error(`❌ [API Error] Failed to start part generation for project ${projectId}:`, err);
-      this.processingIds.delete(projectId); // Clean up on initial failure
-    }
-  },
-
-  async generateChapters(partId: string) {
-    const projectId = this.activeProject?.id;
-    if (!projectId) return;
-
-    this.processingIds.add(partId); // Mark part as processing
-    this.error = null;
-    try {
-      const response = await apiClient.post(`/crew/generate-chapters/${partId}`);
-      const taskStore = useTaskStore();
-      taskStore.pollJobStatus(response.data.job_id, projectId);
-    } catch (err: any) {
-      console.error(`❌ [API Error] Failed to start chapter detailing for part ${partId}:`, err);
-      this.processingIds.delete(partId);
-    }
-  },
-
-  async generateChapterContent(chapterId: string) {
-    const projectId = this.activeProject?.id;
-    if (!projectId) return;
-
-    this.processingIds.add(chapterId); // Mark chapter as processing
-    this.error = null;
-    try {
-      const response = await apiClient.post(`/chapters/${chapterId}/generate`);
-      const taskStore = useTaskStore();
-      taskStore.pollJobStatus(response.data.job_id, projectId);
-    } catch (err: any) {
-      console.error(`❌ [API Error] Failed to generate content for chapter ${chapterId}:`, err);
-      this.processingIds.delete(chapterId);
-    }
-  },
-
-  // --- FINALIZE ACTIONS ---
-  async finalizeParts(id: string, partsData: FinalizePartsPayload) {
-    this.isLoading = true;
-    try {
-      console.log(`➡️ [API Request] PUT /projects/${id}/finalize-parts with payload:`, partsData);
-      await apiClient.put(`/projects/${id}/finalize-parts`, partsData);
-      console.log(`✅ [API Success] Parts finalized. Refreshing project data...`);
-      await this.fetchProjectById(id);
-    } catch (err: any) {
-      console.error(`❌ [API Error] Failed to finalize parts for project ${id}:`, err);
-      this.error = `Failed to finalize parts for project ${id}.`;
-      throw err;
-    } finally {
-      this.isLoading = false;
-    }
-  },
-
-  async finalizeChapters(partId: string, chaptersData: FinalizeChaptersPayload) {
-    const projectId = this.activeProject?.id;
-    if (!projectId) return;
-
-    this.isLoading = true;
-    try {
-      console.log(`➡️ [API Request] PUT /parts/${partId}/finalize-chapters with payload:`, chaptersData);
-      await apiClient.put(`/parts/${partId}/finalize-chapters`, chaptersData);
-      console.log(`✅ [API Success] Chapters finalized for part ${partId}. Refreshing project data...`);
-      await this.fetchProjectById(projectId);
-    } catch (err: any) {
-      this.error = `Failed to finalize chapters for part ${partId}.`;
-      console.error(err);
-      throw err;
-    } finally {
-      this.isLoading = false;
-    }
-  },
-},
   getters: {
     projectCount: (state) => state.projects.length,
   },

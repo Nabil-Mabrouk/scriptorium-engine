@@ -1,6 +1,8 @@
 import os
 import shutil # For cleanup in example
 
+import os
+
 def get_folder_info(folder_path: str) -> str:
     """
     Takes a folder path as an argument and returns a string containing:
@@ -27,6 +29,13 @@ def get_folder_info(folder_path: str) -> str:
 
     # Use os.walk to traverse the directory tree
     for root, dirs, files in os.walk(absolute_folder_path):
+        # --- MODIFICATION START ---
+        # Exclude the 'node_modules' directory from the traversal.
+        # By removing it from the 'dirs' list, os.walk will not step into it.
+        if 'node_modules' in dirs:
+            dirs.remove('node_modules')
+        # --- MODIFICATION END ---
+        
         # Calculate the relative path from the initial folder to the current 'root'
         relative_path = os.path.relpath(root, absolute_folder_path)
 
@@ -50,14 +59,15 @@ def get_folder_info(folder_path: str) -> str:
         # Add files
         for fname in files:
             output_lines.append(f"{indent_level}{fname}")
-
-    # --- Section 2: Python File Contents ---
+            
+    # --- Section 2: .py File Contents (This section should be completed) ---
+# --- Section 2: Python File Contents ---
     output_lines.append("\n--- Python File Contents (.py files) ---")
     found_py_files = False
 
     for root, _, files in os.walk(absolute_folder_path):
         for filename in files:
-            if filename.endswith(".py") :
+            if filename.endswith(".vue") or filename.endswith(".ts"):
                 found_py_files = True
                 full_file_path = os.path.join(root, filename)
                 output_lines.append(f"\n--- FILE: {full_file_path} ---")
@@ -75,13 +85,14 @@ def get_folder_info(folder_path: str) -> str:
 
     return "\n".join(output_lines)
 
+
 # --- Example Usage ---
 if __name__ == "__main__":
     # Define the output file name
-    output_filename = "backend_analysis_report.txt"
+    output_filename = "frontend_analysis_report.txt"
 
     # Create a dummy folder structure for testing
-    test_folder = "src"
+    test_folder = "frontend/src"
 
     print(f"Analyzing folder: '{test_folder}'...")
     info_string = get_folder_info(test_folder)

@@ -72,24 +72,6 @@ async def get_project_details(
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
-@router.get(
-    "/{project_id}",
-    response_model=ProjectDetailRead,
-    summary="Get Full Project Details"
-)
-async def get_project_details(
-    project_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session)
-):
-    """
-    Retrieves the full details of a project, including all its
-    parts and chapters, for display on a dashboard.
-    """
-    project = await service.get_project_with_details(session=session, project_id=project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return project
-
 # NEW: Endpoint for Phase 1 Validation
 @router.put(
     "/{project_id}/finalize-parts",

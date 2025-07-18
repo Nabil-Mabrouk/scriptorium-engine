@@ -1,15 +1,14 @@
 from pydantic import BaseModel, Field
-from typing import List
-from pydantic import BaseModel, Field, field_validator
-from typing import List, Union
-import json
-from pydantic import BaseModel, Field, validator, ValidationError
-from typing import List, Union
+from typing import List, Union, Any # Add Any for the result field
+import json # Keep if still used by PartListOutline validator, otherwise remove
+from pydantic import field_validator
 
 class TaskStatus(BaseModel):
     """A simple schema for returning the status of a queued job."""
     job_id: str
     status: str
+    result: Any | None = Field(None, description="The result of the completed job, if available.")
+    error: str | None = Field(None, description="An error message if the job failed.")
 
 # --- Brief and Chapter Schemas (No changes here) ---
 class ChapterBrief(BaseModel):
@@ -33,7 +32,8 @@ class PartOnlyOutline(BaseModel):
     title: str = Field(..., description="Title of the part")
     summary: str = Field(..., description="Brief summary of the part's content")
 
-    @validator('part_number')
+    @field_validator('part_number')
+    @classmethod
     def part_number_positive(cls, v):
         if v < 1:
             raise ValueError('Part number must be positive integer')
@@ -42,9 +42,10 @@ class PartOnlyOutline(BaseModel):
 class PartListOutline(BaseModel):
     parts: List[PartOnlyOutline] = Field(..., description="List of book parts")
     
-    @validator('parts', pre=True)
+    @field_validator('parts',  mode='before')
+    @classmethod
     def ensure_list(cls, v):
-        """Handle different output formats for Pydantic V1"""
+        """Handle different output formats for Pydantic V2"""
         if isinstance(v, dict):
             # Convert dict to list of parts
             if 'parts' in v:
@@ -62,7 +63,8 @@ class PartListOutline(BaseModel):
                 pass
         return v
     
-    @validator('parts')
+    @field_validator('parts')
+    @classmethod
     def check_min_parts(cls, v):
         """Ensure at least 3 parts are generated"""
         if len(v) < 3:

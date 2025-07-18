@@ -6,6 +6,7 @@
         <button @click="removePart(index)" class="text-red-400 hover:text-red-300 text-sm">Remove</button>
       </div>
       <div class="space-y-3">
+        <!-- Using BaseInput for consistency is a good future refactor -->
         <input type="text" v-model="part.title" placeholder="Part Title" class="w-full p-2 bg-slate-800 border border-slate-600 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none">
         <textarea v-model="part.summary" placeholder="Part Summary" rows="3" class="w-full p-2 bg-slate-800 border border-slate-600 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none"></textarea>
       </div>
@@ -15,8 +16,12 @@
       <button @click="addPart" class="px-4 py-2 rounded-md font-semibold border border-slate-600 hover:bg-slate-700 transition-colors">
         + Add Part
       </button>
-      <button @click="submitFinalization" class="px-6 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 transition-colors">
-        Finalize Part Structure
+      <button 
+        @click="submitFinalization" 
+        class="px-6 py-2 rounded-md font-semibold bg-teal-600 hover:bg-teal-500 transition-colors"
+        :disabled="projectStore.isLoading"
+      >
+        {{ projectStore.isLoading ? 'Finalizing...' : 'Finalize Part Structure' }}
       </button>
     </div>
   </div>
@@ -25,23 +30,20 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { useProjectStore } from '@/stores/project';
+import { useUiStore } from '@/stores/ui'; // NEW: Import the ui store
 
-// Define the shape of a Part again for strong typing
-interface Part {
-  part_number: number;
-  title: string;
-  summary: string;
-}
+import type { PartOnlyOutline, PartListOutline } from '@/lib/types';
 
 const props = defineProps<{
   projectId: string;
-  draftParts: { parts: Part[] };
+  draftParts: PartListOutline; 
 }>();
 
 const projectStore = useProjectStore();
-const editableParts = ref<Part[]>([]);
+const uiStore = useUiStore(); // NEW: Initialize the ui store
 
-// When the component receives the draft parts, create a deep copy for editing
+const editableParts = ref<PartOnlyOutline[]>([]);
+
 watch(() => props.draftParts, (newDraft) => {
   editableParts.value = JSON.parse(JSON.stringify(newDraft.parts || []));
 }, { immediate: true, deep: true });
@@ -62,16 +64,30 @@ const removePart = (index: number) => {
 };
 
 const submitFinalization = async () => {
-  // Re-number parts sequentially before submitting to maintain order
-  const finalParts = {
+  const finalParts: PartListOutline = { 
     parts: editableParts.value.map((part, index) => ({
       ...part,
       part_number: index + 1,
     })),
   };
 
-  if (confirm('Are you sure you want to finalize this structure? This will replace any existing parts.')) {
-    await projectStore.finalizeParts(props.projectId, finalParts);
+  // NEW: Use the custom confirmation dialog
+  const confirmed = await uiStore.showConfirmation(
+    'Finalize Part Structure',
+    'Are you sure you want to finalize this structure? This will replace any existing parts and chapters for this project.',
+    'Yes, Finalize', // Custom confirm button text
+    'No, Cancel'      // Custom cancel button text
+  );
+
+  if (confirmed) {
+    try {
+      await projectStore.finalizeParts(props.projectId, finalParts);
+      uiStore.showSuccessToast('Part structure finalized successfully!'); // Success toast
+    } catch (error: any) {
+      uiStore.showErrorToast(error.message || 'Failed to finalize part structure.'); // Error toast
+    }
+  } else {
+    uiStore.showInfoToast('Part finalization cancelled.'); // Info toast for cancellation
   }
 };
 </script>

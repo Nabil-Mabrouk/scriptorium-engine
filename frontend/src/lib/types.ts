@@ -4,20 +4,24 @@
  */
 
 export interface paths {
-    "/projects/": {
+    "/projects": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get All Projects
+         * @description Retrieves a list of all projects.
+         */
+        get: operations["get_all_projects_projects_get"];
         put?: never;
         /**
          * Create a new book project
          * @description Creates a new project record from a user's 'raw_blueprint'.
          */
-        post: operations["create_new_project_projects__post"];
+        post: operations["create_new_project_projects_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -59,6 +63,27 @@ export interface paths {
          *     Part records in the database, finalizing the book's high-level structure.
          */
         put: operations["finalize_project_parts_projects__project_id__finalize_parts_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chapters/{chapter_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Review and Finalize Chapter Content
+         * @description Allows a user to review and optionally edit generated chapter content,
+         *     and set its status. A new version of the content is saved.
+         */
+        put: operations["review_chapter_content_chapters__chapter_id__review_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -193,15 +218,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/crew/crew/status/{job_id}": {
+    "/crew/status/{job_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Job Status */
-        get: operations["job_status_crew_crew_status__job_id__get"];
+        /**
+         * Get Job Status
+         * @description Checks the status of a background job using the direct status() method.
+         */
+        get: operations["get_job_status_crew_status__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/crew/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Available AI Agent Names
+         * @description Retrieves a list of all defined AI agent names from the AGENT_ROSTER.
+         *     This is used by the frontend to populate dropdowns for suggested agents.
+         */
+        get: operations["get_agent_names_crew_agents_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -278,10 +327,7 @@ export interface components {
             /** Suggested Agent */
             suggested_agent: string;
         };
-        /**
-         * ChapterRead
-         * @description Read schema for a single Chapter, using the 'brief' field.
-         */
+        /** ChapterRead */
         ChapterRead: {
             /**
              * Id
@@ -297,7 +343,6 @@ export interface components {
             status: string;
             /** Suggested Agent */
             suggested_agent?: string | null;
-            part: components["schemas"]["PartRead"];
         };
         /** FinalizationRequest */
         FinalizationRequest: {
@@ -338,27 +383,7 @@ export interface components {
              */
             summary: string;
         };
-        /**
-         * PartRead
-         * @description Read schema for a single Part.
-         */
-        PartRead: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Part Number */
-            part_number: number;
-            /** Title */
-            title: string;
-            /** Summary */
-            summary?: string | null;
-        };
-        /**
-         * PartReadWithChapters
-         * @description Read schema for a Part that includes its nested Chapters.
-         */
+        /** PartReadWithChapters */
         PartReadWithChapters: {
             /**
              * Id
@@ -385,10 +410,7 @@ export interface components {
             /** Raw Blueprint */
             raw_blueprint: string;
         };
-        /**
-         * ProjectDetailRead
-         * @description Read schema for a full Project, including all its Parts and Chapters.
-         */
+        /** ProjectDetailRead */
         ProjectDetailRead: {
             /**
              * Id
@@ -411,10 +433,7 @@ export interface components {
              */
             parts: components["schemas"]["PartReadWithChapters"][];
         };
-        /**
-         * ProjectRead
-         * @description Base read schema for a project.
-         */
+        /** ProjectRead */
         ProjectRead: {
             /**
              * Id
@@ -441,6 +460,16 @@ export interface components {
             job_id: string;
             /** Status */
             status: string;
+            /**
+             * Result
+             * @description The result of the completed job, if available.
+             */
+            result?: unknown | null;
+            /**
+             * Error
+             * @description An error message if the job failed.
+             */
+            error?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -451,6 +480,30 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** ChapterReviewRequest */
+        src__project__chapter_router__ChapterReviewRequest__1: {
+            /** Content */
+            content: string;
+            /**
+             * Status
+             * @default CONTENT_REVIEWED
+             */
+            status: string;
+        };
+        /** ChapterReviewRequest */
+        src__project__chapter_router__ChapterReviewRequest__2: {
+            /**
+             * Content
+             * @description The reviewed or edited content for the chapter.
+             */
+            content: string;
+            /**
+             * New Status
+             * @description The new status for the chapter after review (e.g., 'CONTENT_REVIEWED').
+             * @default CONTENT_REVIEWED
+             */
+            new_status: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -460,7 +513,27 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    create_new_project_projects__post: {
+    get_all_projects_projects_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRead"][];
+                };
+            };
+        };
+    };
+    create_new_project_projects_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -546,6 +619,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectDetailRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_chapter_content_chapters__chapter_id__review_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chapter_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["src__project__chapter_router__ChapterReviewRequest__2"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterRead"];
                 };
             };
             /** @description Validation Error */
@@ -753,7 +861,7 @@ export interface operations {
             };
         };
     };
-    job_status_crew_crew_status__job_id__get: {
+    get_job_status_crew_status__job_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -770,7 +878,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TaskStatus"];
                 };
             };
             /** @description Validation Error */
@@ -780,6 +888,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_names_crew_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
         };

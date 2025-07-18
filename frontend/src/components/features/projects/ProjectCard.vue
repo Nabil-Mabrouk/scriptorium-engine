@@ -20,27 +20,21 @@
 </template>
 
 <script setup lang="ts">
-import { defineProps, computed } from 'vue';
-import type { PropType } from 'vue';
+import { computed } from 'vue';
+import type { PropType } from 'vue'; // Keep PropType if using it for type inference (though directly importing is often cleaner)
 import { RouterLink } from 'vue-router';
 
-// This should be the same, corrected interface from your store
-interface Project {
-  id: string;
-  raw_blueprint: string;
-  status: string;
-  total_cost: string; // Correctly typed as string
-  structured_outline?: { [key: string]: any } | null;
-}
+// IMPORTER: Import ProjectRead from the auto-generated types.ts
+import type { ProjectRead } from '@/lib/types';
 
 const props = defineProps({
+  // Use the imported ProjectRead type
   project: {
-    type: Object as PropType<Project>,
+    type: Object as PropType<ProjectRead>,
     required: true,
   },
 });
 
-// A defensive computed property to prevent errors
 const truncatedBlueprint = computed(() => {
   const blueprint = props.project?.raw_blueprint || '';
   if (blueprint.length > 150) {

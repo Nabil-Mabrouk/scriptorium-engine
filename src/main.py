@@ -15,14 +15,19 @@ from redis.asyncio import Redis # Use async Redis client
 # NEW: Import CORSMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 
+# NEW IMPORT: Import the logging configuration and Python's logging module
+import logging
+from src.core.logging import configure_logging
+
+# Configure logging as early as possible
+configure_logging()
+logger = logging.getLogger(__name__) # Get a logger instance for this module
+
 app = FastAPI(title="Scriptorium-Engine", version=settings.APP_VERSION)
 
 # NEW: CORS Configuration
-origins = [
-    "http://localhost:5173",  # This is the default port for Vite dev server
-    # Add any other origins where your frontend might be hosted in development or production
-    # e.g., "https://your.production.domain"
-]
+# Use settings.CORS_ORIGINS from config.py
+origins = settings.CORS_ORIGINS.split(',') # Split the comma-separated string from settings
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,29 +39,35 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
+    logger.info("Application startup initiated.")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database schema creation/check completed.")
+    
     task_queue.configure(settings.REDIS_URL)
     await task_queue.connect()
+    logger.info("Task queue connected to Redis.")
 
-    # NEW: Initialize FastAPILimiter with Redis
     redis_client = Redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
     await FastAPILimiter.init(redis_client)
-    print("⚡ FastAPILimiter initialized.")
+    logger.info("⚡ FastAPILimiter initialized.")
+    logger.info("Application startup complete.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    logger.info("Application shutdown initiated.")
     await task_queue.close()
-    # NEW: Close FastAPILimiter connections
     await FastAPILimiter.close()
-    print("🔌 FastAPILimiter closed.")
+    logger.info("🔌 FastAPILimiter closed.")
+    logger.info("Application shutdown complete.")
+
 
 app.include_router(project_router)
 app.include_router(chapter_router)
-# NEW: Include the new part_router
 app.include_router(part_router)
 app.include_router(crew_router)
 
 @app.get("/", tags=["Health Check"])
 async def health_check():
+    logger.debug("Health check requested.") # Example of debug logging
     return {"status": "ok", "version": settings.APP_VERSION}

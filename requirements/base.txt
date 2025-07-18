@@ -14,3 +14,4 @@ arq
 redis
 openai-agents
 fastapi-limiter[redis]
+circuitbreaker

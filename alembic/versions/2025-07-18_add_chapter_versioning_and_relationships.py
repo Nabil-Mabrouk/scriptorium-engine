@@ -1,8 +1,8 @@
 """Add chapter versioning and relationships
 
-Revision ID: 718acc1c92ef
+Revision ID: c788ddf96478
 Revises: 
-Create Date: 2025-07-16 14:18:59.333249
+Create Date: 2025-07-18 05:03:51.227976
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '718acc1c92ef'
+revision = 'c788ddf96478'
 down_revision = None
 branch_labels = None
 depends_on = None
