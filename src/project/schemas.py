@@ -1,4 +1,5 @@
 # src/project/schemas.py
+# src/project/schemas.py
 import uuid
 from decimal import Decimal
 from pydantic import BaseModel, Field, ConfigDict
@@ -18,10 +19,14 @@ class ProjectRead(BaseModel):
     id: uuid.UUID
     raw_blueprint: str
     status: str
-    structured_outline: Dict[str, Any] | None = None
+    # structured_outline: Dict[str, Any] | None = None # OLD: Remove this line
+    
+    # NEW: Add dedicated draft outline fields
+    draft_parts_outline: Dict[str, Any] | None = None # Corresponds to PartListOutline JSON
+    draft_chapters_outline: Dict[str, Dict[str, Any]] | None = None # Corresponds to {part_id: ChapterListOutline JSON}
+
     total_cost: Decimal
     
-    # FIX: Replace Config class with model_config
     model_config = ConfigDict(from_attributes=True)
 
 class PartRead(BaseModel):
@@ -29,9 +34,12 @@ class PartRead(BaseModel):
     part_number: int
     title: str
     summary: str | None = None
+    status: str # NEW: Add the status field here
 
     # FIX: Replace Config class with model_config
     model_config = ConfigDict(from_attributes=True)
+
+
 
 class ChapterRead(BaseModel):
     id: uuid.UUID
@@ -52,6 +60,10 @@ class PartReadWithChapters(PartRead):
     # FIX: This also needs the config since it inherits from PartRead but is a new model
     model_config = ConfigDict(from_attributes=True)
 
+class ProjectDetailRead(ProjectRead):
+    parts: list[PartReadWithChapters] = []
+
+    model_config = ConfigDict(from_attributes=True)
 
 class ProjectDetailRead(ProjectRead):
     parts: list[PartReadWithChapters] = []

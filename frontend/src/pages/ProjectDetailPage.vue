@@ -55,34 +55,44 @@
                 <div>
                   <strong class="text-white">Part {{ part.part_number }}:</strong>
                   <span class="ml-2 text-slate-300">{{ part.title }}</span>
-                  <!-- NEW: Display Part Summary -->
                   <p class="text-sm text-slate-400 mt-1 pl-4 border-l-2 border-slate-700">{{ part.summary }}</p>
                 </div>
-                <!-- Phase 2: PARTS_VALIDATED -> Generate Chapters for a Part -->
-                <button 
-                  v-if="project.status === 'PARTS_VALIDATED' && !part.chapters?.length"
-                  @click="handleGenerateChapters(part.id)"
-                  :disabled="projectStore.processingIds.has(part.id)"
-                  class="px-3 py-1 text-sm rounded-md font-semibold transition-colors"
-                  :class="{
-                    'bg-teal-600 hover:bg-teal-500': !projectStore.processingIds.has(part.id),
-                    'bg-slate-500 cursor-not-allowed': projectStore.processingIds.has(part.id)
-                  }"
-                >
-                  {{ projectStore.processingIds.has(part.id) ? 'Processing...' : 'Detail Chapters' }}
-                </button>
-                <!-- Alternatively, if chapters exist but need re-detailing: -->
-                <button 
-                  v-else-if="project.status === 'PARTS_VALIDATED' && part.chapters?.length && !projectStore.processingIds.has(part.id)"
-                  @click="handleGenerateChapters(part.id)"
-                  class="px-3 py-1 text-sm rounded-md font-semibold bg-blue-600 hover:bg-blue-500 transition-colors"
-                >
-                  Re-Detail Chapters
-                </button>
+                
+                <!-- Buttons for Chapter Detailing / Re-detailing / Processing -->
+                <div class="flex-shrink-0">
+                    <button 
+                        v-if="part.status === 'DEFINED' && !projectStore.processingIds.has(part.id)"
+                        @click="handleGenerateChapters(part.id)"
+                        class="px-3 py-1 text-sm rounded-md font-semibold transition-colors bg-teal-600 hover:bg-teal-500"
+                    >
+                        Detail Chapters
+                    </button>
+                    <button
+                        v-else-if="projectStore.processingIds.has(part.id)"
+                        class="px-3 py-1 text-sm rounded-md font-semibold transition-colors bg-slate-500 cursor-not-allowed"
+                        disabled
+                    >
+                        Processing...
+                    </button>
+                    <button 
+                        v-else-if="part.status === 'CHAPTERS_VALIDATED' && !projectStore.processingIds.has(part.id)"
+                        @click="handleGenerateChapters(part.id)"
+                        class="px-3 py-1 text-sm rounded-md font-semibold bg-blue-600 hover:bg-blue-500 transition-colors"
+                    >
+                        Re-Detail Chapters
+                    </button>
+                    <button
+                        v-else-if="part.status === 'CHAPTERS_PENDING_VALIDATION' && part.id !== selectedPartId"
+                        @click="selectedPartId = part.id"
+                        class="px-3 py-1 text-sm rounded-md font-semibold bg-blue-600 hover:bg-blue-500 transition-colors"
+                    >
+                        Review Chapters
+                    </button>
+                </div>
               </div>
               
               <!-- Display Finalized Chapters for the Part -->
-              <div v-if="part.chapters && part.chapters.length > 0" class="mt-4 pl-6 border-l-2 border-slate-700 space-y-3">
+              <div v-if="part.chapters && part.chapters.length > 0 && part.status === 'CHAPTERS_VALIDATED'" class="mt-4 pl-6 border-l-2 border-slate-700 space-y-3">
                 <details v-for="chapter in part.chapters" :key="chapter.id" class="bg-slate-800/50 rounded-lg">
                   <summary class="p-2 cursor-pointer hover:bg-slate-700/50 rounded-lg list-none">
                     <div class="flex justify-between items-center">
@@ -127,14 +137,21 @@
               </div>
 
               <!-- Phase 2.5: CHAPTERS_PENDING_VALIDATION -> Edit Chapter Outline for this Part -->
-              <!-- Render ChapterEditor only if project status allows and if it's the currently selected part -->
-              <div v-if="project.status === 'CHAPTERS_PENDING_VALIDATION' && part.id === selectedPartId && draftChaptersOutline">
+              <!-- Render ChapterEditor only if the part's status is PENDING_VALIDATION and it's the currently selected part -->
+              <div v-if="part.status === 'CHAPTERS_PENDING_VALIDATION' && part.id === selectedPartId">
                 <h3 class="text-teal-400 font-semibold mb-3 mt-4">Draft Chapters for Part "{{ part.title }}" Ready for Review</h3>
                 <ChapterEditor
                   :project-id="project.id"
                   :part-id="selectedPartId" 
-                  :draft-chapters="draftChaptersOutline"
+                  :draft-chapters="getDraftChaptersOutlineForPart(selectedPartId)"
                 />
+              </div>
+              <!-- Section for when chapters are pending validation, but this isn't the selected part -->
+              <div v-else-if="part.status === 'CHAPTERS_PENDING_VALIDATION' && part.id !== selectedPartId" class="text-center p-4 border-2 border-dashed border-slate-700 rounded-lg mt-4">
+                  <p class="text-slate-400 mb-4">Chapters for this part are pending validation.</p>
+                  <button @click="selectedPartId = part.id" class="px-4 py-2 rounded-md font-semibold bg-blue-600 hover:bg-blue-500 transition-colors">
+                      Review Chapters
+                  </button>
               </div>
             </div>
           </div>
@@ -143,78 +160,100 @@
     </div>
   </AppLayout>
 </template>
-
 <script setup lang="ts">
 import { onMounted, computed, ref, watch } from 'vue';
 import { useProjectStore } from '@/stores/project';
 import AppLayout from '@/components/layout/AppLayout.vue';
 import PartEditor from '@/components/features/projects/PartEditor.vue';
 import ChapterEditor from '@/components/features/projects/ChapterEditor.vue';
+import { useUiStore } from '@/stores/ui'; 
 
-// IMPORTER: Import necessary types from the auto-generated types.ts
 import type { 
   ProjectDetailRead, 
   PartListOutline, 
   ChapterListOutline,
-  ChapterRead // For content property
+  ChapterRead 
 } from '@/lib/types';
 
 
 const props = defineProps<{ id: string }>();
 const projectStore = useProjectStore();
+const uiStore = useUiStore();
 
-// This computed property points to the single project being viewed
 const project = computed<ProjectDetailRead | null>(() => projectStore.activeProject);
 
-// This state tracks which part we are currently detailing chapters for editing
 const selectedPartId = ref<string>('');
 
-// Fetch the project data when the page loads
-onMounted(() => {
-  projectStore.fetchProjectById(props.id);
+onMounted(async () => {
+  console.log('--- ProjectDetailPage mounted ---');
+  await projectStore.fetchProjectById(props.id);
+  console.log('Project data fetched on mount. Current project value:', JSON.parse(JSON.stringify(project.value)));
+  project.value?.parts.forEach(part => {
+    console.log(`[OnMount] Part ${part.part_number} (${part.id.substring(0,8)}...): status=${part.status}, processing=${projectStore.processingIds.has(part.id)}`);
+  });
+  console.log('ProjectStore.processingIds on mount:', Array.from(projectStore.processingIds));
 });
 
-// Watch for project changes to update selectedPartId if status changes to chapter detailing
-watch(() => project.value?.status, (newStatus) => {
-  if (newStatus === 'CHAPTERS_PENDING_VALIDATION' && project.value?.structured_outline) {
-    // Attempt to find the part ID from the structured_outline if it's there
-    // This is a heuristic: assuming structured_outline will have one key for the part being detailed
-    const partIds = Object.keys(project.value.structured_outline);
-    if (partIds.length > 0 && !selectedPartId.value) { // Only set if not already set by button click
-      selectedPartId.value = partIds[0]; 
+watch(() => project.value, (newProject) => {
+  console.log('--- Project object updated via watcher ---');
+  console.log('New project value in watcher:', JSON.parse(JSON.stringify(newProject)));
+  if (newProject) { // Removed '&& newProject.structured_outline' as drafts are now separate fields
+    // If a part is in CHAPTERS_PENDING_VALIDATION, ensure selectedPartId points to it.
+    const pendingPart = newProject.parts.find(p => p.status === 'CHAPTERS_PENDING_VALIDATION');
+    if (pendingPart && selectedPartId.value !== pendingPart.id) {
+      selectedPartId.value = pendingPart.id;
+      uiStore.showInfoToast(`Chapters for Part "${pendingPart.title}" are ready for review!`);
+    } else if (!pendingPart && newProject.status !== 'PARTS_PENDING_VALIDATION') {
+      selectedPartId.value = '';
     }
   }
-}, { immediate: true });
+  newProject?.parts.forEach(part => {
+    console.log(`[Watch] Part ${part.part_number} (${part.id.substring(0,8)}...): status=${part.status}, processing=${projectStore.processingIds.has(part.id)}`);
+  });
+  console.log('ProjectStore.processingIds in watcher:', Array.from(projectStore.processingIds));
+
+}, { immediate: true, deep: true });
 
 
-// NEW COMPUTED PROPERTIES for draft outlines
 const draftPartsOutline = computed<PartListOutline | null>(() => {
-  // Check if structured_outline exists and contains a 'parts' array (characteristic of PartListOutline)
-  if (project.value?.status === 'PARTS_PENDING_VALIDATION' && project.value.structured_outline && 'parts' in project.value.structured_outline) {
-    return project.value.structured_outline as PartListOutline;
+  // NEW: Check project.value.draft_parts_outline directly
+  if (project.value?.draft_parts_outline) {
+    return project.value.draft_parts_outline as PartListOutline;
   }
   return null;
 });
 
-const draftChaptersOutline = computed<ChapterListOutline | null>(() => {
-  // Check if structured_outline exists, we have a selectedPartId, and that part ID exists in the outline
-  if (project.value?.status === 'CHAPTERS_PENDING_VALIDATION' && project.value.structured_outline && selectedPartId.value) {
-    const chapterOutlineData = project.value.structured_outline[selectedPartId.value];
-    // Further check if it looks like a ChapterListOutline
-    if (chapterOutlineData && 'chapters' in chapterOutlineData) {
-      return chapterOutlineData as ChapterListOutline;
+
+// NEW: Helper function to get chapter outline for a specific part (now correctly checking draft_chapters_outline)
+const getDraftChaptersOutlineForPart = (partId: string): ChapterListOutline | null => {
+  console.log(`[getDraftChaptersOutlineForPart] Requested for part ID: ${partId}`);
+  console.log(`[getDraftChaptersOutlineForPart] Current project.value.draft_chapters_outline:`, JSON.parse(JSON.stringify(project.value?.draft_chapters_outline || {})));
+
+  // NEW: Access nested 'draft_chapters_outline' and then the partId within it
+  if (project.value?.draft_chapters_outline) {
+    const draftChaptersMap = project.value.draft_chapters_outline as Record<string, any>;
+    if (draftChaptersMap && draftChaptersMap[partId]) {
+      const chapterOutlineData = draftChaptersMap[partId];
+      if (chapterOutlineData && 'chapters' in chapterOutlineData) {
+        console.log(`[getDraftChaptersOutlineForPart] Found and returning draft chapters for part ID ${partId}.`);
+        return chapterOutlineData as ChapterListOutline;
+      } else {
+        console.log(`[getDraftChaptersOutlineForPart] Found draft_chapters_outline[${partId}], but it does not contain 'chapters' property.`);
+      }
+    } else {
+      console.log(`[getDraftChaptersOutlineForPart] draft_chapters_outline does not contain key for part ID ${partId}.`);
     }
+  } else {
+    console.log(`[getDraftChaptersOutlineForPart] draft_chapters_outline is null or undefined.`);
   }
   return null;
-});
+};
 
 
-// Helper function to format brief keys (e.g., "required_inclusions" -> "Required Inclusions")
 const formatBriefKey = (key: string) => {
   return key.replace(/_/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 };
 
-// Helper function to format brief values (arrays as bullet points)
 const formatBriefValue = (value: any) => {
   if (Array.isArray(value)) {
     return value.length > 0 ? value.map(item => `• ${item}`).join('\n') : 'N/A';
@@ -223,19 +262,27 @@ const formatBriefValue = (value: any) => {
 };
 
 
-// Handler to trigger the parts generation AI
 const handleGenerateParts = async () => {
+  console.log('handleGenerateParts: Initiating part generation.');
   await projectStore.generateParts(props.id);
+  console.log('handleGenerateParts: Part generation action dispatched.');
 };
 
-// Handler to trigger the chapters generation AI for a specific part
 const handleGenerateChapters = async (partId: string) => {
-  selectedPartId.value = partId; // Crucially, set the selected part ID before triggering generation
+  console.log(`handleGenerateChapters: Initiating chapter generation for part: ${partId}`);
+  const part = project.value?.parts.find(p => p.id === partId);
+  console.log(`handleGenerateChapters: Part ${partId.substring(0,8)}... status before API call: ${part?.status}`);
+  console.log(`handleGenerateChapters: processingIds before API call: ${Array.from(projectStore.processingIds)}`);
+
+  selectedPartId.value = partId;
   await projectStore.generateChapters(partId);
+
+  console.log(`handleGenerateChapters: Chapter generation action dispatched. processingIds: ${Array.from(projectStore.processingIds)}`);
 };
 
-// Add this new handler function
 const handleGenerateContent = async (chapterId: string) => {
+  console.log(`handleGenerateContent: Initiating content generation for chapter: ${chapterId}`);
   await projectStore.generateChapterContent(chapterId);
+  console.log('handleGenerateContent: Content generation action dispatched.');
 };
 </script>

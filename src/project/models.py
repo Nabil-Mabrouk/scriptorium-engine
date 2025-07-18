@@ -3,17 +3,21 @@ import uuid
 from sqlalchemy import Column, String, TEXT, Integer, Numeric, DateTime, ForeignKey, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import JSON
-# from sqlalchemy.dialects.postgresql import UUID # This is already there, ensure it's imported
-from datetime import datetime # NEW: Import datetime
+from datetime import datetime
 from src.core.database import Base
 
 class Project(Base):
     __tablename__ = "projects"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     raw_blueprint = Column(TEXT, nullable=False)
-    structured_outline = Column(JSON, nullable=True)
+    # structured_outline = Column(JSON, nullable=True) # OLD: Remove or comment out this line
+    
+    # NEW: Dedicated JSON columns for drafts
+    draft_parts_outline = Column(JSON, nullable=True) # Will store PartListOutline JSON
+    draft_chapters_outline = Column(JSON, nullable=True) # Will store a map: {part_id: ChapterListOutline JSON}
+
     status = Column(String, default="RAW_IDEA", nullable=False)
-    summary_outline = Column(TEXT, nullable=True)
+    summary_outline = Column(TEXT, nullable=True) # Keep existing
     total_cost = Column(Numeric(10, 8), nullable=False, default=0.0)
     parts = relationship("Part", back_populates="project", cascade="all, delete-orphan")
 
@@ -38,21 +42,21 @@ class Chapter(Base):
     title = Column(String, nullable=False)
     brief = Column(JSON, nullable=True)
     content = Column(TEXT, nullable=True)
-    # UPDATED: Initial status for a new chapter.
-    # It's 'BRIEF_COMPLETE' after human validation, but we can refine this later.
-    # For now, let's ensure the `content`-related statuses are distinct.
-    status = Column(String, default="BRIEF_COMPLETE") # Status when brief is finalized, awaiting content generation
+    status = Column(String, default="BRIEF_COMPLETE")
     suggested_agent = Column(String, nullable=True)
     transition_feedback = Column(TEXT, nullable=True)
     part = relationship("Part", back_populates="chapters")
-    versions = relationship("ChapterVersion", back_populates="chapter", cascade="all, delete-orphan", order_by="ChapterVersion.created_at")
+    versions = relationship(
+        "ChapterVersion",
+        backref="chapter_object", # Renamed backref to avoid conflict with `chapter` column name (if one existed, though unlikely here)
+        cascade="all, delete-orphan",
+        order_by="ChapterVersion.created_at"
+    )
 
 class ChapterVersion(Base):
     __tablename__ = "chapter_versions"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
     content = Column(TEXT, nullable=False)
-    token_count = Column(Integer, nullable=True) # NEW: Store token count for the version
+    token_count = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    chapter = relationship("Chapter", back_populates="versions")

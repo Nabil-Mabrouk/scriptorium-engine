@@ -134,7 +134,6 @@ async def log_crew_run(
     await session.commit()
     logger.info(f"📊 Run Logged: '{initiating_task_name}' ({model_name_for_logging}) - Tokens: {total_tokens}, Cost: ${run_cost:.6f}")
 
-
 async def run_part_generation_crew(session: AsyncSession, project_id: uuid.UUID) -> bool:
     logger.info(f"🚀 Starting Part generation for project: {project_id}")
     project = None
@@ -160,8 +159,11 @@ async def run_part_generation_crew(session: AsyncSession, project_id: uuid.UUID)
                 await session.commit()
             return False
         except Exception as e:
-            logger.exception(f"❌ Error during agent execution for Part generation for project {project_id}: {e}") # Use logger.exception to log traceback
-            raise # Re-raise to be caught by the outer try-except for general error handling
+            logger.exception(f"❌ Error during agent execution for Part generation for project {project_id}: {e}")
+            if project:
+                project.status = "PART_GENERATION_FAILED"
+                await session.commit()
+            raise
 
         part_list_outline: PartListOutline = run_result.final_output_as(PartListOutline)
 
@@ -169,21 +171,27 @@ async def run_part_generation_crew(session: AsyncSession, project_id: uuid.UUID)
             logger.warning(f"⚠️ Part generation failed: Agent returned an empty 'parts' list despite schema. Retrying or manual intervention may be needed for project {project_id}.")
             return False
 
-        # NOTE: If Pydantic validator `check_min_parts` is active, it will raise a ValidationError here.
-        # The current code will catch it as a generic Exception.
-        # If len(part_list_outline.parts) < 3 is just a warning, then it's fine.
         if len(part_list_outline.parts) < 3:
             logger.warning(f"⚠️ Part generation warning for project {project_id}: Agent generated only {len(part_list_outline.parts)} parts, expected at least 3 as per schema. Review agent instructions or model.")
-            pass # Continue, but log as warning
+            pass
 
         logger.info(f"🔍 Generated {len(part_list_outline.parts)} parts for project {project_id}:")
-        for i, part_data in enumerate(part_list_outline.parts[:3]): # Log only first few for brevity
+        for i, part_data in enumerate(part_list_outline.parts[:3]):
             logger.info(f"  Part {part_data.part_number}: {part_data.title} - Summary: {part_data.summary[:100]}...")
             if i == 2 and len(part_list_outline.parts) > 3:
                 logger.info(f"  ... and {len(part_list_outline.parts)-3} more parts")
 
-        project.structured_outline = part_list_outline.model_dump()
+        # --- UPDATED STRATEGIC LOGIC FOR DRAFT OUTLINES ---
+        project.draft_parts_outline = part_list_outline.model_dump()
+        logger.debug(f"Updated project {project.id} draft_parts_outline.")
+        
+        # Clear draft_chapters_outline as we are starting a new parts generation cycle
+        project.draft_chapters_outline = None
+        logger.debug(f"Cleared draft_chapters_outline for project {project.id} during part generation.")
+        # --- END UPDATED STRATEGIC LOGIC ---
+
         project.status = "PARTS_PENDING_VALIDATION"
+        session.add(project) # Mark project as dirty
         await session.commit()
         logger.info(f"✅ Part structure generated for project {project_id}. Status: {project.status}")
 
@@ -214,6 +222,8 @@ async def run_part_generation_crew(session: AsyncSession, project_id: uuid.UUID)
         return False
 
 
+
+
 async def run_chapter_detailing_crew(session: AsyncSession, part_id: uuid.UUID) -> bool:
     logger.info(f"🚀 Starting chapter detailing for part: {part_id}")
     part = None
@@ -225,6 +235,11 @@ async def run_chapter_detailing_crew(session: AsyncSession, part_id: uuid.UUID) 
         
         if not part.title or not part.summary:
             logger.error(f"❌ Chapter detailing failed: Part {part_id} is missing title or summary. Cannot detail chapters.")
+            return False
+
+        project = part.project
+        if not project:
+            logger.error(f"❌ Chapter detailing failed: Project for part {part_id} not found.")
             return False
 
         agent_input = (
@@ -255,6 +270,9 @@ async def run_chapter_detailing_crew(session: AsyncSession, part_id: uuid.UUID) 
             return False
         except Exception as e:
             logger.exception(f"❌ Error during agent execution for Chapter detailing for part {part_id}: {e}")
+            if part:
+                part.status = "CHAPTER_DETAILING_FAILED"
+                await session.commit()
             raise
         
         chapter_list_outline: ChapterListOutline = run_result.final_output_as(ChapterListOutline)
@@ -266,18 +284,30 @@ async def run_chapter_detailing_crew(session: AsyncSession, part_id: uuid.UUID) 
         if len(chapter_list_outline.chapters) < 3:
              logger.warning(f"⚠️ Chapter detailing warning for part {part.id}: Agent generated only {len(chapter_list_outline.chapters)} chapters. Consider reviewing agent output or instructions.")
 
-        project = part.project # Assuming part.project is eagerly loaded or available via relationship
 
-        if project.structured_outline is None:
-            project.structured_outline = {}
+        # --- CRITICAL FIX FOR ACCUMULATING DRAFT CHAPTERS OUTLINE ---
+        # Get the current draft_chapters_outline. If null, initialize to an empty dict.
+        # IMPORTANT: Make a SHALLOW COPY if project.draft_chapters_outline is already an object.
+        # This forces SQLAlchemy to recognize a new object assignment.
+        current_draft_chapters_map = project.draft_chapters_outline.copy() if project.draft_chapters_outline is not None else {}
         
-        # Store the chapter outline under the part's UUID in the project's structured_outline
-        project.structured_outline[str(part.id)] = chapter_list_outline.model_dump()
+        # Store ChapterListOutline under the part's UUID in the map
+        current_draft_chapters_map[str(part.id)] = chapter_list_outline.model_dump()
+        logger.debug(f"Added/updated draft chapters for part {part.id} in map.")
         
+        # Assign the updated map back to the project's draft_chapters_outline
+        project.draft_chapters_outline = current_draft_chapters_map
+        logger.debug(f"Assigned updated draft_chapters_outline to project {project.id}.")
+        
+        # Clear draft_parts_outline as this is a new chapter detailing cycle
+        project.draft_parts_outline = None
+        logger.debug(f"Cleared draft_parts_outline for project {project.id} during chapter detailing.")
+        # --- END CRITICAL FIX ---
+
         part.status = "CHAPTERS_PENDING_VALIDATION"
         
-        session.add(project) # Ensure project is marked for update
-        session.add(part) # Ensure part is marked for update
+        session.add(project) # Mark project as dirty (draft_chapters_outline changed)
+        session.add(part) # Mark part as dirty (status changed)
         await session.commit()
         
         logger.info(f"✅ Chapter structure generated for part {part.id}. Status: {part.status}")
@@ -307,7 +337,7 @@ async def run_chapter_detailing_crew(session: AsyncSession, part_id: uuid.UUID) 
         
         logger.critical(f"🔥 Critical error during Chapter detailing{part_status_message}: {e}", exc_info=True)
         return False
-
+    
 async def run_chapter_generation_crew(session: AsyncSession, chapter_id: uuid.UUID) -> bool:
     logger.info(f"🚀 Starting content generation for chapter: {chapter_id}")
     chapter = None

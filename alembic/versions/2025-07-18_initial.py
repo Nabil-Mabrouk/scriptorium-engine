@@ -1,8 +1,8 @@
-"""Add chapter versioning and relationships
+"""Initial
 
-Revision ID: c788ddf96478
+Revision ID: 0196dad3d456
 Revises: 
-Create Date: 2025-07-18 05:03:51.227976
+Create Date: 2025-07-18 22:48:15.463127
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = 'c788ddf96478'
+revision = '0196dad3d456'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -21,7 +21,8 @@ def upgrade() -> None:
     op.create_table('projects',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('raw_blueprint', sa.TEXT(), nullable=False),
-    sa.Column('structured_outline', sa.JSON(), nullable=True),
+    sa.Column('draft_parts_outline', sa.JSON(), nullable=True),
+    sa.Column('draft_chapters_outline', sa.JSON(), nullable=True),
     sa.Column('status', sa.String(), nullable=False),
     sa.Column('summary_outline', sa.TEXT(), nullable=True),
     sa.Column('total_cost', sa.Numeric(precision=10, scale=8), nullable=False),

@@ -60,19 +60,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'; // Import onMounted
+import { ref, watch, onMounted } from 'vue';
 import { useProjectStore } from '@/stores/project';
-import { useAgentStore } from '@/stores/agent'; // NEW: Import the new agent store
+import { useAgentStore } from '@/stores/agent';
 
 import type { ChapterOutline, ChapterListOutline, ChapterBrief } from '@/lib/types';
 
-// Extend ChapterBrief type locally for the string versions of array fields
 interface EditableChapterBrief extends ChapterBrief {
   required_inclusions_string?: string;
   key_questions_to_answer_string?: string;
 }
 
-// Extend ChapterOutline to use the editable brief and ensure it can hold the string versions
 interface EditableChapterOutline extends ChapterOutline {
   brief: EditableChapterBrief;
 }
@@ -80,34 +78,35 @@ interface EditableChapterOutline extends ChapterOutline {
 const props = defineProps<{
   projectId: string;
   partId: string;
-  draftChapters: ChapterListOutline; 
+  draftChapters: ChapterListOutline | null; // Allow this prop to be null
 }>();
 
 const projectStore = useProjectStore();
-const agentStore = useAgentStore(); // NEW: Initialize the agent store
+const agentStore = useAgentStore();
 const editableChapters = ref<EditableChapterOutline[]>([]);
 
-// Fetch agent names when the component mounts
+const arrayToString = (arr: string[] | undefined) => (arr ? arr.join(', ') : '');
+const stringToArray = (str: string | undefined) => (str ? str.split(',').map(s => s.trim()).filter(s => s.length > 0) : []);
+
 onMounted(() => {
   agentStore.fetchAgentNames();
 });
 
-// Helper function to convert array to comma-separated string
-const arrayToString = (arr: string[] | undefined) => (arr ? arr.join(', ') : '');
-// Helper function to convert comma-separated string to array
-const stringToArray = (str: string | undefined) => (str ? str.split(',').map(s => s.trim()).filter(s => s.length > 0) : []);
-
-
 watch(() => props.draftChapters, (newDraft) => {
-  editableChapters.value = JSON.parse(JSON.stringify(newDraft.chapters || []));
-  editableChapters.value.forEach(chapter => {
-    chapter.brief.required_inclusions_string = arrayToString(chapter.brief.required_inclusions);
-    chapter.brief.key_questions_to_answer_string = arrayToString(chapter.brief.key_questions_to_answer);
-    // Ensure suggested_agent is initialized to an empty string if null/undefined for dropdown default
-    if (!chapter.suggested_agent) {
-      chapter.suggested_agent = '';
-    }
-  });
+  // CRITICAL FIX: Add a null check here
+  if (newDraft && newDraft.chapters) {
+    editableChapters.value = JSON.parse(JSON.stringify(newDraft.chapters));
+    editableChapters.value.forEach(chapter => {
+      chapter.brief.required_inclusions_string = arrayToString(chapter.brief.required_inclusions);
+      chapter.brief.key_questions_to_answer_string = arrayToString(chapter.brief.key_questions_to_answer);
+      if (!chapter.suggested_agent) {
+        chapter.suggested_agent = '';
+      }
+    });
+  } else {
+    // If newDraft is null or has no chapters, clear editableChapters
+    editableChapters.value = [];
+  }
 }, { immediate: true, deep: true });
 
 const addChapter = () => {

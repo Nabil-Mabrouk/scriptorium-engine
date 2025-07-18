@@ -93,37 +93,41 @@ async def finalize_part_structure(
     Deletes existing parts for a project and creates new ones based on the
     user-validated structure. Updates the project status.
     """
-    project = await get_project_with_details(session, project_id)
+    project = await get_project_with_details(session, project_id) # Using get_project_with_details for comprehensive load
     if not project:
         logger.error(f"Cannot finalize parts: Project {project_id} not found.")
         return None
 
-    # Delete existing parts and their cascade-deleted chapters/versions
-    # Using delete(Part).where(...) is generally more efficient for mass deletes
-    # than project.parts.clear() for detached or large collections.
     await session.execute(
         delete(Part).where(Part.project_id == project.id)
     )
-    logger.info(f"Existing parts for project {project_id} cleared.")
+    logger.info(f"Existing parts for project {project_id} cleared from database.")
     
     for part_data in validated_parts.parts:
         new_part = Part(
             project_id=project.id,
             part_number=part_data.part_number,
             title=part_data.title,
-            summary=part_data.summary
+            summary=part_data.summary,
+            status="DEFINED"
         )
         session.add(new_part)
-        logger.debug(f"Added new part: {new_part.title} to project {project_id}")
+        logger.debug(f"Added new part: {new_part.title} (Part {new_part.part_number}) to project {project_id}")
 
     project.status = "PARTS_VALIDATED"
-    session.add(project) # Ensure project state is tracked for update
+
+    # --- UPDATED STRATEGIC LOGIC: Clear dedicated draft fields after finalization ---
+    project.draft_parts_outline = None # Clear draft after it's finalized into real parts
+    project.draft_chapters_outline = None # Also clear chapter drafts if re-finalizing parts
+    logger.debug(f"Cleared draft_parts_outline and draft_chapters_outline for project {project_id} after parts finalization.")
+    # --- END UPDATED STRATEGIC LOGIC ---
+
+    session.add(project) # Mark project as dirty
     await session.commit()
-    await session.refresh(project) # Refresh to load newly added parts
+    await session.refresh(project)
     logger.info(f"Part structure finalized for project {project_id}. Status: {project.status}")
 
     return project
-
 async def finalize_chapter_structure(
     session: AsyncSession, part_id: uuid.UUID, validated_chapters: ChapterListOutline
 ) -> Part:
@@ -136,7 +140,6 @@ async def finalize_chapter_structure(
         logger.error(f"Cannot finalize chapters: Part {part_id} not found.")
         return None
 
-    # Delete existing chapters directly via a query
     await session.execute(
         delete(Chapter).where(Chapter.part_id == part.id)
     )
@@ -147,7 +150,7 @@ async def finalize_chapter_structure(
             part_id=part.id,
             chapter_number=chapter_data.chapter_number,
             title=chapter_data.title,
-            brief=chapter_data.brief.model_dump(), # Ensure brief is dumped to JSON
+            brief=chapter_data.brief.model_dump(),
             suggested_agent=chapter_data.suggested_agent,
             status="BRIEF_COMPLETE"
         )
@@ -155,12 +158,30 @@ async def finalize_chapter_structure(
         logger.debug(f"Added new chapter: {new_chapter.title} to part {part_id}")
 
     part.status = "CHAPTERS_VALIDATED"
-    # session.add(part) # No need to add part if it's already a managed object, but explicit `session.add(part)` is harmless
+    
+    # --- UPDATED STRATEGIC LOGIC: Clear specific chapter draft after finalization ---
+    project = part.project # Need project object to update its draft_chapters_outline
+    if project and project.draft_chapters_outline: # Check if the map exists
+        current_draft_chapters_map = project.draft_chapters_outline
+        if str(part.id) in current_draft_chapters_map:
+            del current_draft_chapters_map[str(part.id)]
+            logger.debug(f"Cleared draft_chapters_outline for part {part.id} from project {project.id} after chapter finalization.")
+            
+            # If the map becomes empty, set the entire draft_chapters_outline to None
+            if not current_draft_chapters_map:
+                project.draft_chapters_outline = None
+                logger.debug(f"Set draft_chapters_outline to None as it became empty for project {project.id}.")
+            else:
+                # Explicitly re-assign if the map itself changed (item deleted)
+                project.draft_chapters_outline = current_draft_chapters_map
+                logger.debug(f"Re-assigned draft_chapters_outline for project {project.id} after deleting part's entry.")
+        
+        session.add(project) # Mark project as dirty
+    # --- END UPDATED STRATEGIC LOGIC ---
 
     await session.commit()
     logger.info(f"Chapter structure finalized for part {part_id}. Status: {part.status}")
 
-    # NEW: Re-fetch the part, eagerly loading its chapters for the response model
     refreshed_part_stmt = select(Part).options(
         selectinload(Part.chapters)
     ).where(Part.id == part_id)
@@ -174,8 +195,6 @@ async def finalize_chapter_structure(
         logger.error(f"Failed to re-fetch part {part_id} after finalizing chapters.")
 
     return refreshed_part
-
-
 async def update_project_summary_outline(session: AsyncSession, project_id: uuid.UUID, outline: str) -> Project | None:
     """(Legacy) Updates the summary_outline field of a project."""
     logger.info(f"Attempting to update summary outline for project {project_id}.")
@@ -188,7 +207,6 @@ async def update_project_summary_outline(session: AsyncSession, project_id: uuid
     else:
         logger.warning(f"Failed to update summary outline: Project {project_id} not found.")
     return project
-
 
 async def update_chapter_status(session: AsyncSession, chapter_id: uuid.UUID, new_status: str) -> Chapter | None:
     """Updates the status of a specific chapter."""
